@@ -1,6 +1,8 @@
 pandas
 numpy
 scikit-learn
-matplotlib
-seaborn
-openpyxl
+joblib
+flask
+flask-cors
+pymysql
+cryptography

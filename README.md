@@ -1,51 +1,80 @@
-# VerifyMesh Machine Learning Pipeline
+# VerifyMesh Machine Learning Architecture
 
-## Project
+## Project Overview
 
-VerifyMesh: Enhancing Workforce Task Allocation Through Competency Assessment and Eligibility Prediction.
+VerifyMesh is an AI-assisted competency assessment and task eligibility engine integrated into SalesMesh.
 
-## Current Stage
+## Machine Learning Responsibilities
 
-Step 1 - Data Preprocessing and Stratified Train/Test Split
+### 1. Google Colab (Training & Tuning Only)
+**Google Colab is the exclusive environment responsible for:**
+- Training dataset ingestion & exploration
+- Data preprocessing & stratified train/test split
+- Feature engineering experiments
+- Random Forest model training
+- Hyperparameter tuning (`RandomizedSearchCV` / `GridSearchCV`)
+- Cross-validation (`StratifiedKFold`) & evaluation metrics (accuracy, macro F1, confusion matrices)
+- Exporting the final trained model: `tuned_random_forest.joblib` or `final_random_forest.joblib`
 
-## Dataset
+### 2. VerifyMesh Application (Inference & Prediction Only)
+**The VerifyMesh Flask backend is responsible for:**
+- Loading the pre-trained `.joblib` model **once at startup** via `src/inference.py`
+- Validating agent competency inputs (10 raw predictor features)
+- Applying necessary feature transformations (e.g. `certified_leverage` via `src/features.py`)
+- Generating real-time competency predictions & confidence scores
+- Returning predictions to the React frontend
 
-The modelling dataset contains 2,000 simulated agents and 12 columns.
+> [!NOTE]
+> The VerifyMesh application does NOT train, tune, or retrain the Random Forest model.
 
-The target variable is:
+## Model Classes
 
-- competency_level
+The Random Forest model predicts one of four competency tiers:
+1. **Needs Improvement** (Level 1)
+2. **Basic** (Level 2)
+3. **Competent** (Level 3)
+4. **Advanced** (Level 4)
 
-The predictor variables are:
+## VerifyMesh Workflow
 
-- previous_experience_months
-- sales_experience_months
-- customer_service_experience_months
-- certification_count
-- relevant_certification
-- assessment_score
-- communication_score
-- product_knowledge_score
-- sales_skill_score
-- customer_service_score
+```
+Agent
+↓
+Login
+↓
+Complete Assessment
+↓
+Assessment Scores & Profile
+↓
+VerifyMesh Flask Backend
+↓
+Preloaded Colab Random Forest Model
+↓
+Competency Prediction (Level 1 - 4)
+↓
+Certification Check & Task Requirements (Rules Engine)
+↓
+Eligibility Decision (Eligible / Not Eligible)
+↓
+Task Recommendation & Human Review
+```
 
-`agent_id` is excluded from model training because it is an identifier rather than a predictive feature.
+## Running the Application
 
-## Train/Test Split
+### 1. Backend (Flask API)
+```powershell
+.\.venv\Scripts\python.exe backend/app.py
+```
+*API runs on `http://127.0.0.1:5000` with endpoints:*
+- `POST /api/auth/login`
+- `GET /api/health`
+- `POST /api/competency/predict`
+- `GET /api/competency/model-info`
+- `GET /api/competency/sample-inputs`
 
-An 80/20 stratified split is used:
-
-- Training set: 1,600 records
-- Test set: 400 records
-
-Random state:
-
-- 42
-
-Stratification is used to preserve the competency-level distribution in both datasets.
-
-## Current Status
-
-No machine-learning model has been trained at this stage.
-
-The Random Forest modelling stage will begin only after the preprocessing and split have been independently verified.
+### 2. Frontend (React + Vite)
+```powershell
+cd frontend
+npm run dev
+```
+*Web client runs on `http://localhost:5173`.*
