@@ -25,3 +25,7 @@ Thumbs.db
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
+
+# ML Models
+backend/models/*.joblib
+*.joblib

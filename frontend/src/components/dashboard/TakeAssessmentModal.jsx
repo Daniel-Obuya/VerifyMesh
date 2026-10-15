@@ -163,6 +163,36 @@ export const TakeAssessmentModal = ({
     }
   };
 
+  const DECISION_MAP = {
+    '0': 'Ineligible',
+    '1': 'Send to Review',
+    '2': 'Eligible',
+    0: 'Ineligible',
+    1: 'Send to Review',
+    2: 'Eligible',
+  };
+
+  const TIER_INFO_MAP = {
+    'Ineligible': {
+      level: 1,
+      title: 'Ineligible (Needs Improvement)',
+      description: 'Current assessment and experience metrics indicate competency needs improvement before task eligibility.',
+      eligibleTasks: '0 of 4 Tasks',
+    },
+    'Send to Review': {
+      level: 2,
+      title: 'Send to Review (Basic)',
+      description: 'Basic domain capability demonstrated. Profile flagged for supervisory review and verification.',
+      eligibleTasks: '2 of 4 Tasks (Pending Review)',
+    },
+    'Eligible': {
+      level: 3,
+      title: 'Eligible (Competent / Advanced)',
+      description: 'Verified domain proficiency across customer handling, product metrics, and communication. Eligible for active task allocations.',
+      eligibleTasks: '4 of 4 Tasks',
+    },
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsLoading(true);
@@ -194,16 +224,61 @@ export const TakeAssessmentModal = ({
 
     try {
       const res = await competencyService.predictCompetency(payload);
-      if (res?.success) {
-        setResult(res);
+      const isSuccess = res?.status === 'success' || res?.success;
+      if (isSuccess && res?.data) {
+        const rawDecision = String(res.data.decision ?? '');
+        const mappedDecision = DECISION_MAP[rawDecision] || rawDecision || 'Eligible';
+
+        // Map probabilities consistently to operational labels
+        const rawProbs = res.data.probabilities || {};
+        const labeledProbabilities = {};
+        let highestProb = 0;
+
+        for (const [clsKey, probVal] of Object.entries(rawProbs)) {
+          const label = DECISION_MAP[clsKey] || clsKey;
+          const numProb = typeof probVal === 'number' ? probVal : parseFloat(probVal) || 0;
+          const pct = numProb <= 1.0 ? Math.round(numProb * 1000) / 10 : Math.round(numProb * 10) / 10;
+          labeledProbabilities[label] = pct;
+          if (numProb > highestProb) {
+            highestProb = numProb;
+          }
+        }
+
+        // Derive confidence consistently
+        const derivedConfidence = typeof res.data.confidence === 'number'
+          ? (res.data.confidence <= 1.0 ? Math.round(res.data.confidence * 100) : Math.round(res.data.confidence))
+          : (highestProb <= 1.0 ? Math.round(highestProb * 100) : Math.round(highestProb));
+
+        const tierMeta = TIER_INFO_MAP[mappedDecision] || {
+          level: 2,
+          title: mappedDecision,
+          description: 'AI-assisted evaluation based on competency assessment.',
+          eligibleTasks: 'Evaluated'
+        };
+
+        const resultObj = {
+          success: true,
+          status: 'success',
+          decision: rawDecision,
+          prediction: mappedDecision,
+          predicted_competency: mappedDecision,
+          confidence: derivedConfidence,
+          level_tier: tierMeta.level,
+          tier_info: tierMeta,
+          probabilities: labeledProbabilities,
+          raw_data: res.data
+        };
+
+        setResult(resultObj);
         if (onAssessmentComplete) {
-          onAssessmentComplete(res, payload);
+          onAssessmentComplete(resultObj, payload);
         }
       } else {
-        setError(res?.error || 'Failed to complete assessment evaluation.');
+        setError(res?.message || res?.error || 'Failed to complete assessment evaluation.');
       }
     } catch (err) {
-      setError(err?.message || 'Server error while running Google Colab model evaluation.');
+      const errDetail = err?.data?.message || err?.message || 'Server error while running model evaluation.';
+      setError(errDetail);
     } finally {
       setIsLoading(false);
     }
@@ -284,7 +359,7 @@ export const TakeAssessmentModal = ({
                 <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 col-span-2 sm:col-span-1">
                   <span className="text-xs font-semibold text-slate-400 uppercase">Eligible Tasks</span>
                   <p className="text-xl font-bold text-slate-900 mt-1">
-                    {(result.predicted_competency || result.prediction) === 'Advanced' ? '3 of 3 Tasks' : '2 of 3 Tasks'}
+                    {result.tier_info?.eligibleTasks || ((result.predicted_competency || result.prediction) === 'Eligible' ? '4 of 4 Tasks' : (result.predicted_competency || result.prediction) === 'Send to Review' ? 'Pending Review' : '0 of 4 Tasks')}
                   </p>
                   <p className="text-[11px] text-slate-500 font-medium mt-0.5">Updated live</p>
                 </div>

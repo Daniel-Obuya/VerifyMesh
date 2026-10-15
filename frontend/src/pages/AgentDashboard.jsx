@@ -75,68 +75,67 @@ export const AgentDashboard = () => {
     const checkAgentAssessment = async () => {
       setIsCheckingStatus(true);
       try {
-        // 1. Check if user profile already has assessment info
-        const directCompetency = user?.competency_level || user?.competencyLevel;
-        const directAssessment = user?.assessment;
-
-        // 2. Fetch fresh agent status from backend
+        // Backend is the authoritative source. Try it first.
         let backendStatus = null;
+        let backendReachable = false;
         try {
-          const res = await competencyService.getAgentStatus(user?.id);
-          if (res?.success) {
-            backendStatus = res;
+          const res = await competencyService.getAgentStatus();
+          if (res?.success !== undefined) {
+            backendReachable = true;
+            if (res.success) backendStatus = res;
           }
         } catch {
-          // Fallback to local storage cache if network glitch
+          // Backend unreachable — will fall back below
         }
 
-        // 3. Fallback to cached local storage if available for this specific user
+        // Read localStorage only when the backend is unreachable (network fallback)
         const localKey = `verifymesh_agent_assessment_${user?.id || 'default'}`;
         let localCached = null;
-        try {
-          const raw = localStorage.getItem(localKey);
-          if (raw) localCached = JSON.parse(raw);
-        } catch {
-          localCached = null;
+        if (!backendReachable) {
+          try {
+            const raw = localStorage.getItem(localKey);
+            if (raw) localCached = JSON.parse(raw);
+          } catch {
+            localCached = null;
+          }
         }
+
+        // When backend is reachable, trust it exclusively
+        // When backend is down, fall back to user profile then localStorage
+        const directCompetency = user?.competency_level || user?.competencyLevel;
+
 
         if (!isMounted) return;
 
         // Determine if agent has completed assessment
+        // When backend is reachable: has_assessed from backend is the only truth.
+        // When backend is unreachable: fall back to user profile / localStorage.
         const hasAssessed = Boolean(
-          (backendStatus && backendStatus.has_assessed && backendStatus.competency_level) ||
-          directCompetency ||
-          (localCached && (localCached.predicted_competency || localCached.competency_level))
+          backendReachable
+            ? (backendStatus?.has_assessed && backendStatus?.competency_level)
+            : (directCompetency || (localCached && (localCached.predicted_competency || localCached.competency_level)))
         );
 
         if (hasAssessed) {
-          const resolvedCompetency = 
-            backendStatus?.competency_level || 
-            directCompetency || 
-            localCached?.predicted_competency || 
-            localCached?.competency_level || 
-            'Competent';
+          const resolvedCompetency =
+            backendStatus?.competency_level ||
+            directCompetency ||
+            localCached?.predicted_competency ||
+            localCached?.competency_level ||
+            'Eligible';
 
-          const resolvedConfidence = 
-            backendStatus?.confidence ?? 
-            localCached?.confidence ?? 
-            user?.confidence ?? 
+          const resolvedConfidence =
+            backendStatus?.confidence ??
+            localCached?.confidence ??
+            user?.confidence ??
             78;
 
-          const resolvedPrediction = 
-            backendStatus?.prediction_data || 
-            localCached?.prediction_data || 
-            localCached || 
+          const resolvedPrediction =
+            backendStatus?.prediction_data ||
+            localCached?.prediction_data ||
             {
               predicted_competency: resolvedCompetency,
               confidence: resolvedConfidence,
-              level_tier: resolvedCompetency === 'Advanced' || resolvedCompetency === 'Exceeds Standard' ? 4 : 3,
-              probabilities: {
-                [resolvedCompetency]: resolvedConfidence,
-                ...(resolvedCompetency === 'Competent' 
-                  ? { Advanced: 14, Basic: 6, 'Needs Improvement': 2 } 
-                  : { Competent: 10, Basic: 4, 'Needs Improvement': 1 })
-              },
               tier_info: {
                 title: resolvedCompetency,
                 description: 'AI-assisted prediction based on your current competency data.',
@@ -152,6 +151,14 @@ export const AgentDashboard = () => {
             setFormData(backendStatus.assessment);
           } else if (localCached?.assessment) {
             setFormData(localCached.assessment);
+          }
+
+          // Warm the localStorage cache from authoritative backend data
+          if (backendReachable && backendStatus?.has_assessed && user?.id) {
+            try {
+              const localKey2 = `verifymesh_agent_assessment_${user.id}`;
+              localStorage.setItem(localKey2, JSON.stringify(backendStatus));
+            } catch { /* storage quota errors are non-fatal */ }
           }
 
           setRecentActivities([
@@ -234,8 +241,9 @@ export const AgentDashboard = () => {
   // Reset to Unassessed (Demo & Testing Feature)
   const handleResetAssessment = async () => {
     try {
+      // Backend resolves identity from the Bearer token; no user_id arg needed.
+      await competencyService.resetAssessment();
       if (user?.id) {
-        await competencyService.resetAssessment(user.id);
         localStorage.removeItem(`verifymesh_agent_assessment_${user.id}`);
       }
       setHasCompletedAssessment(false);

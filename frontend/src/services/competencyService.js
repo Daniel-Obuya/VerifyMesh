@@ -2,12 +2,21 @@ import { api } from './api';
 
 export const competencyService = {
   /**
-   * Send agent features to Flask backend for inference using Google Colab model
+   * Send agent features to Flask backend for inference using the 3-way decision model
    * @param {Object} agentData
    * @returns {Promise<Object>}
    */
   async predictCompetency(agentData) {
-    return api.post('/competency/predict', agentData);
+    return api.post('/competency/evaluate', agentData);
+  },
+
+  /**
+   * Evaluate eligibility endpoint alias
+   * @param {Object} agentData
+   * @returns {Promise<Object>}
+   */
+  async evaluateEligibility(agentData) {
+    return api.post('/competency/evaluate', agentData);
   },
 
   /**
@@ -31,17 +40,17 @@ export const competencyService = {
    * @param {number|string} [userId]
    * @returns {Promise<Object>}
    */
-  async getAgentStatus(userId) {
-    const query = userId ? `?user_id=${userId}` : '';
-    return api.get(`/competency/agent-status${query}`);
+  async getAgentStatus() {
+    // Identity is resolved server-side from the Bearer token; no user_id param sent.
+    return api.get('/competency/agent-status');
   },
 
   /**
    * Reset assessment back to unassessed state (for demo/testing)
-   * @param {number|string} [userId]
+   * Identity is resolved from the Bearer token; no body payload needed.
    * @returns {Promise<Object>}
    */
-  async resetAssessment(userId) {
-    return api.post('/competency/reset-assessment', { user_id: userId });
+  async resetAssessment() {
+    return api.post('/competency/reset-assessment', {});
   },
 };

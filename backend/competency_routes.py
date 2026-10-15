@@ -1,165 +1,159 @@
-"""
-VerifyMesh - Competency Prediction REST API Routes
-Integrates Flask with the preloaded Google Colab Random Forest Model.
-"""
-
 from flask import Blueprint, request, jsonify
 from src.inference import inference_engine
 from backend.auth_routes import decode_auth_token
-from backend.db import get_agent_assessment, save_agent_assessment, reset_agent_assessment
+from backend.db import save_agent_assessment, get_agent_assessment, reset_agent_assessment
 
-competency_bp = Blueprint('competency', __name__, url_prefix='/api/competency')
+competency_bp = Blueprint("competency", __name__, url_prefix="/api/competency")
 
-@competency_bp.route('/predict', methods=['POST'])
-def predict_competency():
+
+def get_authenticated_agent():
     """
-    Run real-time inference on agent assessment and experience data
-    using the final Google Colab Random Forest model.
-    Persists assessment to agent profile if user is authenticated.
+    Verify the Bearer token and enforce the Agent role.
+    Returns (user_id, role, None) on success.
+    Returns (None, None, (response, http_code)) on failure.
+    Accepts both raw DB role 'AGENT' and normalised 'Agent'.
     """
-    data = request.get_json(silent=True) or {}
-    
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None, None, (
+            jsonify({"success": False, "error": "Authorization token required."}), 401
+        )
+    token = auth_header[len("Bearer "):]
+    payload = decode_auth_token(token)
+    if not payload:
+        return None, None, (
+            jsonify({"success": False, "error": "Invalid or expired token."}), 401
+        )
+    role = payload.get("role", "")
+    if role not in ("AGENT", "Agent"):
+        return None, None, (
+            jsonify({"success": False, "error": "Agent role required."}), 403
+        )
+    user_id = payload.get("uid")
+    if not user_id:
+        return None, None, (
+            jsonify({"success": False, "error": "Malformed token: missing uid."}), 401
+        )
+    return user_id, role, None
+
+
+@competency_bp.route("/evaluate", methods=["POST"])
+def evaluate_eligibility():
+    """
+    Evaluate agent eligibility using the 11-feature ML model and persist the result.
+
+    Authentication: Bearer token required; Agent role enforced server-side.
+    Any user_id or agent_id in the request body is silently ignored.
+    The assessment result, model prediction, and audit event are saved in a
+    single transaction; the endpoint returns 500 if persistence fails.
+    """
+    user_id, _role, err = get_authenticated_agent()
+    if err:
+        return err
+
+    data = request.get_json(silent=True)
     if not data:
-        return jsonify({
-            "success": False,
-            "error": "Request body must be a valid JSON object containing agent features."
-        }), 400
+        return jsonify({"status": "error", "message": "No JSON payload provided"}), 400
 
-    result = inference_engine.predict(data)
-    
-    # Check if user is authenticated or user_id provided
-    user_id = data.get("user_id")
-    if not user_id:
-        auth_header = request.headers.get('Authorization', '')
-        token = auth_header.replace('Bearer ', '').strip() if auth_header.startswith('Bearer ') else None
-        if token:
-            payload = decode_auth_token(token)
-            if payload:
-                user_id = payload.get("uid")
+    # Strip any client-supplied identity fields — never trust them
+    data.pop("user_id", None)
+    data.pop("agent_id", None)
 
-    if user_id and result.get("success"):
-        comp_level = result.get("predicted_competency") or result.get("prediction")
-        conf = result.get("confidence")
-        save_agent_assessment(user_id, data, comp_level, conf, prediction_data=result)
-        result["saved_to_profile"] = True
-        result["user_id"] = user_id
+    try:
+        result = inference_engine.predict(data)
+    except ValueError as ve:
+        return jsonify({"status": "error", "message": str(ve)}), 400
+    except RuntimeError as re:
+        return jsonify({"success": False, "error": str(re)}), 503
+    except Exception as e:
+        return jsonify({"status": "error", "message": "An error occurred during inference", "details": str(e)}), 500
 
-    status_code = 200 if result.get("success") else 400
-    return jsonify(result), status_code
-
-@competency_bp.route('/agent-status', methods=['GET'])
-def get_agent_status():
-    """
-    Return whether the current agent has completed an assessment,
-    along with their verified competency level and assessment history.
-    """
-    user_id = request.args.get('user_id')
-    if not user_id:
-        auth_header = request.headers.get('Authorization', '')
-        token = auth_header.replace('Bearer ', '').strip() if auth_header.startswith('Bearer ') else None
-        if token:
-            payload = decode_auth_token(token)
-            if payload:
-                user_id = payload.get("uid")
-
-    if not user_id:
-        return jsonify({
-            "success": True,
-            "has_assessed": False,
-            "competency_level": None,
-            "confidence": None,
-            "assessment": None
-        }), 200
-
-    record = get_agent_assessment(user_id)
-    if record and record.get("competency_level"):
-        return jsonify({
-            "success": True,
-            "has_assessed": True,
-            "competency_level": record.get("competency_level"),
-            "confidence": record.get("confidence"),
-            "assessment": record.get("assessment"),
-            "prediction_data": record.get("prediction_data")
-        }), 200
-
-    return jsonify({
-        "success": True,
-        "has_assessed": False,
-        "competency_level": None,
-        "confidence": None,
-        "assessment": None
-    }), 200
-
-@competency_bp.route('/reset-assessment', methods=['POST'])
-def reset_assessment():
-    """Reset agent back to unassessed state for testing/demoing."""
-    data = request.get_json(silent=True) or {}
-    user_id = data.get('user_id')
-    if not user_id:
-        auth_header = request.headers.get('Authorization', '')
-        token = auth_header.replace('Bearer ', '').strip() if auth_header.startswith('Bearer ') else None
-        if token:
-            payload = decode_auth_token(token)
-            if payload:
-                user_id = payload.get("uid")
-
-    if user_id:
-        reset_agent_assessment(user_id)
-        return jsonify({"success": True, "message": "Agent assessment reset to unassessed state."}), 200
-
-    return jsonify({"success": False, "error": "User identification required."}), 400
-
-@competency_bp.route('/model-info', methods=['GET'])
-def get_model_info():
-    """Return status and metadata of the active Google Colab model."""
-    info = inference_engine.get_info()
-    return jsonify({
-        "success": True,
-        "info": info
-    }), 200
-
-@competency_bp.route('/sample-inputs', methods=['GET'])
-def get_sample_inputs():
-    """Return pre-configured sample inputs for rapid demonstration and validation."""
-    samples = {
-        "competent_agent": {
-            "previous_experience_months": 24,
-            "sales_experience_months": 18,
-            "customer_service_experience_months": 12,
-            "certification_count": 2,
-            "relevant_certification": 1,
-            "assessment_score": 78.5,
-            "communication_score": 82.0,
-            "product_knowledge_score": 79.0,
-            "sales_skill_score": 80.0,
-            "customer_service_score": 85.0
-        },
-        "advanced_agent": {
-            "previous_experience_months": 48,
-            "sales_experience_months": 36,
-            "customer_service_experience_months": 24,
-            "certification_count": 4,
-            "relevant_certification": 1,
-            "assessment_score": 92.0,
-            "communication_score": 94.0,
-            "product_knowledge_score": 90.0,
-            "sales_skill_score": 95.0,
-            "customer_service_score": 93.0
-        },
-        "needs_improvement": {
-            "previous_experience_months": 3,
-            "sales_experience_months": 2,
-            "customer_service_experience_months": 1,
-            "certification_count": 0,
-            "relevant_certification": 0,
-            "assessment_score": 48.0,
-            "communication_score": 52.0,
-            "product_knowledge_score": 45.0,
-            "sales_skill_score": 46.0,
-            "customer_service_score": 50.0
-        }
+    competency_label = result.get("prediction", "Ineligible")
+    confidence = result.get("confidence", 0.0)
+    prediction_data = {
+        "decision": result.get("decision"),
+        "prediction": competency_label,
+        "predicted_competency": competency_label,
+        "confidence": confidence,
+        "probabilities": result.get("probabilities", {}),
     }
+
+    try:
+        saved = save_agent_assessment(
+            user_id=user_id,
+            assessment_data=dict(data),
+            competency_level=competency_label,
+            confidence=confidence,
+            prediction_data=prediction_data,
+        )
+    except ValueError as ve:
+        return jsonify({"success": False, "error": str(ve)}), 422
+    except RuntimeError as re:
+        return jsonify({"success": False, "error": str(re)}), 500
+
+    return jsonify({
+        "status": "success",
+        "data": {
+            "decision": result["decision"],
+            "confidence": confidence,
+            "probabilities": result.get("probabilities", {}),
+        },
+        "saved": {
+            "attempt_number": saved["attempt_number"],
+            "exam_result_id": saved["exam_result_id"],
+            "prediction_id": saved["prediction_id"],
+        },
+    }), 200
+
+
+@competency_bp.route("/agent-status", methods=["GET"])
+def agent_status():
+    """
+    Return the latest persisted competency assessment for the authenticated agent.
+    User identity comes from the Bearer token only; any query-string user_id is ignored.
+    """
+    user_id, _role, err = get_authenticated_agent()
+    if err:
+        return err
+
+    rec = get_agent_assessment(user_id)
+    if not rec:
+        return jsonify({"success": True, "has_assessed": False}), 200
+
     return jsonify({
         "success": True,
-        "samples": samples
+        "has_assessed": True,
+        "competency_level": rec.get("competency_level"),
+        "confidence": rec.get("confidence"),
+        "attempt_number": rec.get("attempt_number"),
+        "assessment": rec.get("assessment"),
+        "prediction_data": rec.get("prediction_data"),
+        "completed_at": rec.get("completed_at"),
+    }), 200
+
+
+@competency_bp.route("/reset-assessment", methods=["POST"])
+def reset_assessment():
+    """
+    Safe, non-destructive demo/testing reset.
+
+    Behaviour: inserts an ASSESSMENT_RESET_REQUESTED event into audit_logs only.
+    No exam_results or ml_predictions rows are deleted; full history is preserved.
+    get_agent_assessment returns None for this agent until a new attempt is
+    persisted after the reset timestamp.
+    """
+    user_id, _role, err = get_authenticated_agent()
+    if err:
+        return err
+
+    ok = reset_agent_assessment(user_id)
+    if not ok:
+        return jsonify({"success": False, "error": "Failed to log reset event."}), 500
+
+    return jsonify({
+        "success": True,
+        "message": (
+            "Reset logged. Assessment history is preserved. "
+            "Submit a new assessment to update your competency record."
+        ),
     }), 200
