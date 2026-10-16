@@ -1,8 +1,12 @@
 # VerifyMesh Machine Learning Architecture
 
 ## Project Overview
+VerifyMesh is an AI-assisted platform that assesses workers' skills and determines whether they qualify for specific tasks on online work platforms.
+In online marketplaces, it can be difficult to verify workers' qualifications and screen large numbers of applicants manually. VerifyMesh aims to make this process easier by combining competency assessments, verified credentials, and machine learning.
+First, an agent completes assessments and provides their credentials. The Flask backend uses verified information, such as work experience and certifications, to create 11 input features for a pre-trained Random Forest model. The model classifies candidates into three groups: Eligible, Ineligible, or requiring human review when the result is uncertain.
+Second, a rules engine checks whether the agent meets the specific requirements of a task, including relevant work experience, valid certifications, and assessment scores.
+The project is currently in Sprint II. The React frontend, Flask backend, MySQL database, and machine-learning model are integrated. The system also includes role-based access controls and audit logs to help protect information and track important activities.
 
-VerifyMesh is an AI-assisted competency assessment and task eligibility engine integrated into SalesMesh.
 
 ## Machine Learning Responsibilities
 
