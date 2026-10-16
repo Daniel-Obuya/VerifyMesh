@@ -69,6 +69,22 @@ class ApiClient {
       ...options,
     });
   }
+
+  put(endpoint, body, options = {}) {
+    return this.request(endpoint, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+      ...options,
+    });
+  }
+
+  patch(endpoint, body, options = {}) {
+    return this.request(endpoint, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+      ...options,
+    });
+  }
 }
 
 export const api = new ApiClient(API_BASE_URL);

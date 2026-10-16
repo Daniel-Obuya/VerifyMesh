@@ -4,7 +4,9 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { AgentDashboard } from './pages/AgentDashboard';
+import { ProfilePage } from './pages/ProfilePage';
 import { AdminDashboard } from './pages/AdminDashboard';
+import { CreateTaskPage } from './pages/CreateTaskPage';
 
 // Protected Route wrapper that redirects unauthenticated users
 const ProtectedRoute = ({ children, allowedRole }) => {
@@ -24,7 +26,7 @@ const ProtectedRoute = ({ children, allowedRole }) => {
 
   if (allowedRole && role !== allowedRole) {
     // If user's role doesn't match this route, redirect to their assigned dashboard
-    return <Navigate to={role === 'Administrator' || role === 'ADMIN' ? '/admin/dashboard' : '/agent/dashboard'} replace />;
+    return <Navigate to={role === 'Administrator' || role === 'ADMIN' ? '/admin/dashboard' : '/dashboard'} replace />;
   }
 
   return children;
@@ -43,7 +45,7 @@ const PublicOnlyRoute = ({ children }) => {
   }
 
   if (isAuthenticated) {
-    return <Navigate to={role === 'Administrator' || role === 'ADMIN' ? '/admin/dashboard' : '/agent/dashboard'} replace />;
+    return <Navigate to={role === 'Administrator' || role === 'ADMIN' ? '/admin/dashboard' : '/dashboard'} replace />;
   }
 
   return children;
@@ -72,12 +74,36 @@ export default function App() {
             }
           />
 
-          {/* Role-Specific Dashboards */}
+          {/* Role-Specific Dashboards & Agent Routes */}
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute allowedRole="Agent">
+                <AgentDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/profile"
+            element={
+              <ProtectedRoute allowedRole="Agent">
+                <ProfilePage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/tasks"
+            element={
+              <ProtectedRoute allowedRole="Agent">
+                <AgentDashboard />
+              </ProtectedRoute>
+            }
+          />
           <Route
             path="/agent/dashboard"
             element={
               <ProtectedRoute allowedRole="Agent">
-                <AgentDashboard />
+                <Navigate to="/dashboard" replace />
               </ProtectedRoute>
             }
           />
@@ -86,6 +112,22 @@ export default function App() {
             element={
               <ProtectedRoute allowedRole="Administrator">
                 <AdminDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/tasks/create"
+            element={
+              <ProtectedRoute allowedRole="Administrator">
+                <CreateTaskPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/tasks/:taskId/edit"
+            element={
+              <ProtectedRoute allowedRole="Administrator">
+                <CreateTaskPage />
               </ProtectedRoute>
             }
           />

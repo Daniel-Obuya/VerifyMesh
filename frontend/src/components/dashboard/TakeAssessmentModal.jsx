@@ -173,23 +173,47 @@ export const TakeAssessmentModal = ({
   };
 
   const TIER_INFO_MAP = {
+    'Needs Improvement': {
+      level: 1,
+      title: 'Needs Improvement',
+      description: 'Current assessment and experience metrics indicate competency needs improvement before task eligibility.',
+      eligibleTasks: '0 Tasks (Prerequisites Pending)',
+    },
+    'Basic': {
+      level: 2,
+      title: 'Basic Competency',
+      description: 'Foundational capability demonstrated. Profile eligible for introductory tasks upon supervisor verification.',
+      eligibleTasks: 'Introductory Opportunities',
+    },
+    'Competent': {
+      level: 3,
+      title: 'Competent',
+      description: 'Verified standard proficiency across customer handling, product metrics, and communication.',
+      eligibleTasks: 'Standard Work Opportunities',
+    },
+    'Advanced': {
+      level: 4,
+      title: 'Advanced',
+      description: 'Exceeds standard competency benchmarks. Eligible for advanced, escalation, and leadership tasks.',
+      eligibleTasks: 'Advanced & Leadership Tasks',
+    },
     'Ineligible': {
       level: 1,
       title: 'Ineligible (Needs Improvement)',
       description: 'Current assessment and experience metrics indicate competency needs improvement before task eligibility.',
-      eligibleTasks: '0 of 4 Tasks',
+      eligibleTasks: '0 Tasks',
     },
     'Send to Review': {
       level: 2,
       title: 'Send to Review (Basic)',
       description: 'Basic domain capability demonstrated. Profile flagged for supervisory review and verification.',
-      eligibleTasks: '2 of 4 Tasks (Pending Review)',
+      eligibleTasks: 'Pending Review',
     },
     'Eligible': {
       level: 3,
       title: 'Eligible (Competent / Advanced)',
-      description: 'Verified domain proficiency across customer handling, product metrics, and communication. Eligible for active task allocations.',
-      eligibleTasks: '4 of 4 Tasks',
+      description: 'Verified domain proficiency across customer handling, product metrics, and communication.',
+      eligibleTasks: 'Eligible Opportunities',
     },
   };
 
@@ -227,7 +251,8 @@ export const TakeAssessmentModal = ({
       const isSuccess = res?.status === 'success' || res?.success;
       if (isSuccess && res?.data) {
         const rawDecision = String(res.data.decision ?? '');
-        const mappedDecision = DECISION_MAP[rawDecision] || rawDecision || 'Eligible';
+        const evaluationDecision = res.data.evaluation_decision || DECISION_MAP[rawDecision] || 'Eligible';
+        const competencyLevel = res.data.competency_level || 'Competent';
 
         // Map probabilities consistently to operational labels
         const rawProbs = res.data.probabilities || {};
@@ -249,9 +274,9 @@ export const TakeAssessmentModal = ({
           ? (res.data.confidence <= 1.0 ? Math.round(res.data.confidence * 100) : Math.round(res.data.confidence))
           : (highestProb <= 1.0 ? Math.round(highestProb * 100) : Math.round(highestProb));
 
-        const tierMeta = TIER_INFO_MAP[mappedDecision] || {
-          level: 2,
-          title: mappedDecision,
+        const tierMeta = TIER_INFO_MAP[competencyLevel] || TIER_INFO_MAP[evaluationDecision] || {
+          level: 3,
+          title: competencyLevel,
           description: 'AI-assisted evaluation based on competency assessment.',
           eligibleTasks: 'Evaluated'
         };
@@ -260,8 +285,9 @@ export const TakeAssessmentModal = ({
           success: true,
           status: 'success',
           decision: rawDecision,
-          prediction: mappedDecision,
-          predicted_competency: mappedDecision,
+          prediction: competencyLevel,
+          predicted_competency: competencyLevel,
+          evaluation_decision: evaluationDecision,
           confidence: derivedConfidence,
           level_tier: tierMeta.level,
           tier_info: tierMeta,
@@ -337,6 +363,11 @@ export const TakeAssessmentModal = ({
                 <h4 className="text-2xl font-bold text-slate-900 mt-3">
                   Predicted Competency: {result.predicted_competency || result.prediction}
                 </h4>
+                {result.evaluation_decision && (
+                  <p className="text-sm font-semibold text-[#3B50BA] mt-1">
+                    Platform Evaluation Decision: <span className="underline">{result.evaluation_decision}</span>
+                  </p>
+                )}
                 <p className="text-sm text-slate-500 mt-1 max-w-md mx-auto">
                   {result.tier_info?.description || 'Your assessment scores have been evaluated by the VerifyMesh inference model.'}
                 </p>
@@ -351,17 +382,17 @@ export const TakeAssessmentModal = ({
                 </div>
 
                 <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
-                  <span className="text-xs font-semibold text-slate-400 uppercase">Assigned Tier</span>
-                  <p className="text-xl font-bold text-slate-900 mt-1">Level {result.level_tier || 3}</p>
-                  <p className="text-[11px] text-emerald-600 font-medium mt-0.5">Verified in Mesh</p>
+                  <span className="text-xs font-semibold text-slate-400 uppercase">Competency Level</span>
+                  <p className="text-xl font-bold text-slate-900 mt-1">{result.predicted_competency || 'Competent'}</p>
+                  <p className="text-[11px] text-emerald-600 font-medium mt-0.5">Tier {result.level_tier || 3} Standard</p>
                 </div>
 
                 <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 col-span-2 sm:col-span-1">
-                  <span className="text-xs font-semibold text-slate-400 uppercase">Eligible Tasks</span>
+                  <span className="text-xs font-semibold text-slate-400 uppercase">Evaluation Decision</span>
                   <p className="text-xl font-bold text-slate-900 mt-1">
-                    {result.tier_info?.eligibleTasks || ((result.predicted_competency || result.prediction) === 'Eligible' ? '4 of 4 Tasks' : (result.predicted_competency || result.prediction) === 'Send to Review' ? 'Pending Review' : '0 of 4 Tasks')}
+                    {result.evaluation_decision || 'Eligible'}
                   </p>
-                  <p className="text-[11px] text-slate-500 font-medium mt-0.5">Updated live</p>
+                  <p className="text-[11px] text-slate-500 font-medium mt-0.5">Per-task criteria apply</p>
                 </div>
               </div>
 

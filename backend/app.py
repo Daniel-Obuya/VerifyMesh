@@ -9,6 +9,7 @@ from flask_cors import CORS
 from backend.config import Config
 from backend.auth_routes import auth_bp
 from backend.competency_routes import competency_bp
+from backend.admin_routes import admin_bp
 from backend.db import check_mysql_status
 from src.inference import inference_engine
 def create_app():
@@ -25,6 +26,7 @@ def create_app():
     # Register blueprints
     app.register_blueprint(auth_bp)
     app.register_blueprint(competency_bp)
+    app.register_blueprint(admin_bp)
 
     @app.route('/api/health', methods=['GET'])
     def health_check():
