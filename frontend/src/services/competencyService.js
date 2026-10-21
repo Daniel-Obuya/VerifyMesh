@@ -55,6 +55,42 @@ export const competencyService = {
   },
 
   /**
+   * Fetch questions and exam metadata for a specific exam
+   * @param {number|string} examId
+   * @returns {Promise<Object>}
+   */
+  async getExamQuestions(examId) {
+    return api.get(`/competency/exams/${examId}/questions`);
+  },
+
+  /**
+   * Explicitly initiate an authoritative assessment attempt for a specific exam
+   * @param {number|string} examId
+   * @param {number|string} [taskId] - optional task ID being qualified for
+   * @returns {Promise<Object>}
+   */
+  async startExamAttempt(examId, taskId = null) {
+    return api.post(`/competency/exams/${examId}/start-attempt`, { task_id: taskId });
+  },
+
+  /**
+   * Submit exam answers for server-side scoring, ML evaluation, and eligibility persistence.
+   * Only question IDs and selected option IDs are submitted, never scores or subscores.
+   * @param {number|string} examId
+   * @param {Object} answers - mapping of question_id -> option ID ("A".."D")
+   * @param {number|string} [taskId] - optional task ID being qualified for
+   * @param {number|string} [attemptId] - authoritative attempt ID
+   * @returns {Promise<Object>}
+   */
+  async submitExam(examId, answers, taskId = null, attemptId = null) {
+    return api.post(`/competency/exams/${examId}/submit`, { 
+      attempt_id: attemptId,
+      answers, 
+      task_id: taskId 
+    });
+  },
+
+  /**
    * Fetch active tasks with server-calculated eligibility and application statuses
    * @returns {Promise<Object>}
    */
@@ -147,5 +183,76 @@ export const competencyService = {
    */
   async deleteCertification(certId) {
     return api.delete(`/competency/certifications/${certId}`);
+  },
+
+  /**
+   * Fetch all active competency assessment topics
+   * @returns {Promise<Object>}
+   */
+  async getTopics() {
+    return api.get('/competency/topics');
+  },
+
+  /**
+   * Fetch specific topic details
+   * @param {number|string} topicId
+   * @returns {Promise<Object>}
+   */
+  async getTopicDetail(topicId) {
+    return api.get(`/competency/topics/${topicId}`);
+  },
+
+  /**
+   * Fetch questions for a specific topic (correct answers omitted on backend)
+   * @param {number|string} topicId
+   * @returns {Promise<Object>}
+   */
+  async getTopicQuestions(topicId) {
+    return api.get(`/competency/topics/${topicId}/questions`);
+  },
+
+  /**
+   * Explicitly start an attempt for a specific topic
+   * @param {number|string} topicId
+   * @param {number|string} [taskId]
+   * @returns {Promise<Object>}
+   */
+  async startTopicAttempt(topicId, taskId = null) {
+    return api.post(`/competency/topics/${topicId}/start-attempt`, { task_id: taskId });
+  },
+
+  /**
+   * Submit answers for a specific topic assessment.
+   * Graded strictly on the server; updates ML prediction and task eligibility.
+   * @param {number|string} topicId
+   * @param {Object} answers - mapping of question_id -> option letter ('A'..'D')
+   * @param {number|string} [taskId]
+   * @param {number|string} [attemptId]
+   * @returns {Promise<Object>}
+   */
+  async submitTopicExam(topicId, answers, taskId = null, attemptId = null) {
+    return api.post(`/competency/topics/${topicId}/submit`, {
+      attempt_id: attemptId,
+      answers,
+      task_id: taskId,
+    });
+  },
+
+  /**
+   * Fetch stored attempt result and evaluated task eligibility
+   * @param {number|string} attemptId
+   * @returns {Promise<Object>}
+   */
+  async getAttemptDetails(attemptId) {
+    return api.get(`/competency/attempts/${attemptId}`);
+  },
+
+  /**
+   * Fetch single task with evaluated topic requirements
+   * @param {number|string} taskId
+   * @returns {Promise<Object>}
+   */
+  async getTaskDetails(taskId) {
+    return api.get(`/competency/tasks/${taskId}`);
   },
 };

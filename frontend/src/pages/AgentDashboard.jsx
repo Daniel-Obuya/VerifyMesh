@@ -22,7 +22,6 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { competencyService } from '../services/competencyService';
-import { TakeAssessmentModal } from '../components/dashboard/TakeAssessmentModal';
 import { CompetencyDetailsModal } from '../components/dashboard/CompetencyDetailsModal';
 import { TaskModal } from '../components/dashboard/TaskModal';
 import { HelpModal } from '../components/dashboard/HelpModal';
@@ -37,12 +36,34 @@ export const AgentDashboard = () => {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
 
   // Modals state
-  const [isAssessmentModalOpen, setIsAssessmentModalOpen] = useState(false);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState(null);
+  const [agentProfile, setAgentProfile] = useState(null);
+  const [taskFilter, setTaskFilter] = useState('all'); // 'all', 'eligible', 'assessment_needed'
+
+  const openAssessmentForTask = (task = null) => {
+    if (task && (task.task_id || task.id)) {
+      navigate(`/agent/assessment/${task.task_id || task.id}`);
+    } else {
+      const taskNeedingExam = tasks.find(t => t.state === 'Assessment Needed' || !t.prerequisites?.assessment_met);
+      if (taskNeedingExam) {
+        navigate(`/agent/assessment/${taskNeedingExam.task_id || taskNeedingExam.id}`);
+      } else {
+        navigate('/agent/assessment/general');
+      }
+    }
+  };
+
+  const handleProceedToApply = (taskId) => {
+    const targetTask = tasks.find(t => (t.task_id || t.id) === taskId);
+    if (targetTask) {
+      setSelectedTask(targetTask);
+      setIsTaskModalOpen(true);
+    }
+  };
 
   // Auto-scroll to tasks section if navigating to /tasks
   useEffect(() => {
@@ -61,18 +82,15 @@ export const AgentDashboard = () => {
   const [formData, setFormData] = useState(null);
   const [predictionData, setPredictionData] = useState(null);
 
-  // Live Tasks and Activities
+  // Live Tasks
   const [tasks, setTasks] = useState([]);
   const [isLoadingTasks, setIsLoadingTasks] = useState(true);
-  const [recentActivities, setRecentActivities] = useState([]);
-  const [isLoadingActivities, setIsLoadingActivities] = useState(true);
   const [dashboardError, setDashboardError] = useState(null);
 
   // Load live dashboard state from authoritative backend
   const fetchDashboardData = async () => {
     setIsCheckingStatus(true);
     setIsLoadingTasks(true);
-    setIsLoadingActivities(true);
     setDashboardError(null);
 
     try {
@@ -100,7 +118,7 @@ export const AgentDashboard = () => {
         const resolvedCompetency =
           (backendStatus?.competency_level && backendStatus.competency_level !== 'Not Yet Assessed')
             ? backendStatus.competency_level
-            : (directCompetency && directCompetency !== 'Not Yet Assessed' ? directCompetency : 'Competent');
+            : (directCompetency && directCompetency !== 'Not Yet Assessed' ? directCompetency : 'Eligible');
 
         const resolvedDecision =
           (backendStatus?.evaluation_decision && backendStatus.evaluation_decision !== 'Not Yet Evaluated')
@@ -166,19 +184,14 @@ export const AgentDashboard = () => {
       setIsLoadingTasks(false);
     }
 
-    // 3. Fetch Recent Activities from genuine audit logs
+    // 3. Fetch authenticated agent profile for verified readiness & missing requirements
     try {
-      const actRes = await competencyService.getAgentActivities();
-      if (actRes?.success && Array.isArray(actRes.activities)) {
-        setRecentActivities(actRes.activities);
-      } else {
-        setRecentActivities([]);
+      const profRes = await competencyService.getProfile();
+      if (profRes?.success && profRes.data) {
+        setAgentProfile(profRes.data);
       }
     } catch (err) {
-      console.error('Error loading activities:', err);
-      setRecentActivities([]);
-    } finally {
-      setIsLoadingActivities(false);
+      console.error('Error loading agent profile:', err);
     }
   };
 
@@ -188,8 +201,8 @@ export const AgentDashboard = () => {
 
   // Handle Assessment Completion
   const handleAssessmentComplete = async (newPrediction, newForm) => {
-    const newTier = newPrediction.predicted_competency || newPrediction.prediction || 'Competent';
-    const newDecision = newPrediction.evaluation_decision || 'Eligible';
+    const newTier = newPrediction.predicted_competency || newPrediction.prediction || 'Eligible';
+    const newDecision = newPrediction.evaluation_decision || (newTier === 'Eligible' ? 'Eligible' : 'Not Eligible');
     const newConf = newPrediction.confidence || 78;
 
     // Cache locally for fallback persistence
@@ -216,12 +229,7 @@ export const AgentDashboard = () => {
 
     // Refresh tasks and audit activities from backend
     try {
-      const [taskRes, actRes] = await Promise.all([
-        competencyService.getAgentTasks(),
-        competencyService.getAgentActivities()
-      ]);
-      if (taskRes?.success && Array.isArray(taskRes.tasks)) setTasks(taskRes.tasks);
-      if (actRes?.success && Array.isArray(actRes.activities)) setRecentActivities(actRes.activities);
+      await fetchDashboardData();
     } catch (err) {
       console.error('Error refreshing post-assessment:', err);
     }
@@ -378,32 +386,32 @@ export const AgentDashboard = () => {
   // Work Overview metrics computed strictly from authoritative backend tasks and agent status
   const firstName = user?.fullName ? user.fullName.trim().split(' ')[0] : (user?.username || 'Agent');
   const availableCount = tasks.filter(t => t.can_apply === true || t.state === 'Ready to Apply').length;
+  const assessmentNeededCount = tasks.filter(t => t.state === 'Assessment Needed' || !t.prerequisites?.assessment_met).length;
   const underReviewCount = tasks.filter(t => ['Application Submitted', 'Under Review'].includes(t.application_status) || t.state === 'Under Review').length;
   const acceptedCount = tasks.filter(t => ['Assigned', 'Accepted'].includes(t.application_status) || t.state === 'Assigned').length;
   const hasPendingCert = tasks.some(t => t.state === 'Verification Pending');
 
+  // Filter tasks based on selected tab
+  const filteredTasks = tasks.filter(t => {
+    if (taskFilter === 'eligible') return t.can_apply === true || t.state === 'Ready to Apply';
+    if (taskFilter === 'assessment_needed') return t.state === 'Assessment Needed' || !t.prerequisites?.assessment_met;
+    return true;
+  });
+
   // Work Readiness state
   const getReadinessState = () => {
-    if (!hasCompletedAssessment) {
+    if (currentCompetency) {
+      const isEligible = currentCompetency === 'Eligible' || evaluationDecision === 'Eligible';
       return {
-        badge: 'Action Required',
-        badgeColor: 'bg-amber-50 text-amber-700 border-amber-200',
-        title: 'Assessment Needed',
-        subtitle: 'Complete evaluation to unlock tasks',
-        actionLabel: 'Take Assessment',
-        onAction: () => setIsAssessmentModalOpen(true),
-        icon: AlertCircle
-      };
-    }
-    if (evaluationDecision === 'Send to Review') {
-      return {
-        badge: 'Under Review',
-        badgeColor: 'bg-blue-50 text-[#3B50BA] border-blue-200',
-        title: 'Awaiting Sign-off',
-        subtitle: 'Assessment pending admin review',
-        actionLabel: 'View Details',
-        onAction: () => setIsDetailsModalOpen(true),
-        icon: Clock
+        badge: isEligible ? 'Verified' : 'Not Eligible',
+        badgeColor: isEligible
+          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+          : 'bg-rose-50 text-rose-700 border-rose-200',
+        title: isEligible ? 'Eligible' : 'Not Eligible',
+        subtitle: isEligible ? 'Verified competency gatekeeper status' : 'Competency threshold not met',
+        actionLabel: 'View Profile',
+        onAction: () => navigate('/profile'),
+        icon: isEligible ? ShieldCheck : AlertCircle
       };
     }
     if (hasPendingCert) {
@@ -418,85 +426,20 @@ export const AgentDashboard = () => {
       };
     }
     return {
-      badge: 'Verified',
-      badgeColor: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-      title: currentCompetency || 'Verified Agent',
-      subtitle: 'Profile ready for opportunities',
-      actionLabel: 'View Profile',
-      onAction: () => navigate('/profile'),
-      icon: ShieldCheck
+      badge: 'Active',
+      badgeColor: 'bg-blue-50 text-[#3B50BA] border-blue-200',
+      title: 'Active Agent',
+      subtitle: 'Select a task to qualify',
+      actionLabel: 'Browse Tasks',
+      onAction: () => {
+        const el = document.getElementById('tasks-section');
+        if (el) el.scrollIntoView({ behavior: 'smooth' });
+      },
+      icon: Briefcase
     };
   };
 
   const readiness = getReadinessState();
-
-  // Contextual Next Action
-  const getNextAction = () => {
-    if (!hasCompletedAssessment) {
-      return {
-        type: 'action',
-        title: 'Competency Assessment Required',
-        description: 'Complete your initial skill evaluation to verify your profile and unlock matching task opportunities.',
-        ctaText: 'Take Assessment',
-        onCta: () => setIsAssessmentModalOpen(true),
-        badge: 'Required Action',
-        icon: Sparkles
-      };
-    }
-    if (evaluationDecision === 'Send to Review') {
-      return {
-        type: 'info',
-        title: 'Assessment Under Administrative Review',
-        description: 'Your evaluation results are pending administrative review. You will be cleared once an admin signs off.',
-        ctaText: 'View Evaluation',
-        onCta: () => setIsDetailsModalOpen(true),
-        badge: 'In Review',
-        icon: Clock
-      };
-    }
-    if (underReviewCount > 0) {
-      return {
-        type: 'info',
-        title: 'Applications Pending Review',
-        description: `You have ${underReviewCount} task application${underReviewCount > 1 ? 's' : ''} currently submitted and under review by task managers.`,
-        ctaText: 'View Applications',
-        onCta: () => {
-          const el = document.getElementById('tasks-section');
-          if (el) el.scrollIntoView({ behavior: 'smooth' });
-        },
-        badge: 'In Pipeline',
-        icon: Clock
-      };
-    }
-    if (availableCount > 0) {
-      return {
-        type: 'opportunity',
-        title: 'Active Opportunities Ready for You',
-        description: `You have ${availableCount} verified task opportunit${availableCount > 1 ? 'ies' : 'y'} matching your credentials ready for immediate application.`,
-        ctaText: 'Explore Opportunities',
-        onCta: () => {
-          const el = document.getElementById('tasks-section');
-          if (el) el.scrollIntoView({ behavior: 'smooth' });
-        },
-        badge: 'Ready to Apply',
-        icon: Briefcase
-      };
-    }
-    return {
-      type: 'neutral',
-      title: 'Profile Up to Date',
-      description: 'Your verified agent profile is in good standing. New matching tasks will automatically appear in your catalog.',
-      ctaText: 'Browse Catalog',
-      onCta: () => {
-        const el = document.getElementById('tasks-section');
-        if (el) el.scrollIntoView({ behavior: 'smooth' });
-      },
-      badge: 'Active & Verified',
-      icon: CheckCircle2
-    };
-  };
-
-  const nextAction = getNextAction();
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col font-sans text-slate-800">
@@ -595,7 +538,7 @@ export const AgentDashboard = () => {
                   type="button"
                   onClick={() => {
                     setIsUserMenuOpen(false);
-                    setIsAssessmentModalOpen(true);
+                    openAssessmentForTask();
                   }}
                   className="w-full text-left px-3 py-2 text-xs font-semibold text-[#3B50BA] hover:bg-blue-50/60 flex items-center gap-2"
                 >
@@ -688,23 +631,24 @@ export const AgentDashboard = () => {
             </button>
           </div>
 
-          {/* Quick Skill Evaluation Sidebar Widget */}
+          {/* Task-Driven Skill Evaluation Sidebar Widget */}
           <div className="my-6 p-4 rounded-2xl bg-gradient-to-br from-blue-50/80 to-indigo-50/40 border border-blue-100 hidden md:block">
             <div className="flex items-center gap-2 text-xs font-bold text-[#3B50BA]">
               <Sparkles className="w-3.5 h-3.5" />
-              <span>{hasCompletedAssessment ? 'Assess Competency' : 'Get Assessed'}</span>
+              <span>Task-Driven Qualification</span>
             </div>
             <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-              {hasCompletedAssessment 
-                ? 'Update your battery scores to unlock higher-tier roles.'
-                : 'Take your initial assessment to calculate your AI competency and unlock matching tasks.'}
+              Each task opportunity defines its required scenario assessment topic. Complete missing evaluations to qualify for matching roles.
             </p>
             <button
               type="button"
-              onClick={() => setIsAssessmentModalOpen(true)}
+              onClick={() => {
+                const el = document.getElementById('tasks-section');
+                if (el) el.scrollIntoView({ behavior: 'smooth' });
+              }}
               className="w-full mt-3 py-2 px-3 bg-[#3B50BA] hover:bg-[#31429e] text-white text-xs font-semibold rounded-xl shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
             >
-              {hasCompletedAssessment ? 'Retake Assessment' : 'Take Assessment'} &rarr;
+              <span>Explore Opportunities</span> &darr;
             </button>
           </div>
 
@@ -774,6 +718,49 @@ export const AgentDashboard = () => {
               </div>
             </div>
 
+            {/* Profile Completion / Readiness Summary */}
+            {agentProfile && agentProfile.readiness_score !== undefined && (
+              <div className="p-3.5 px-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-blue-50 text-[#3B50BA] flex items-center justify-center font-bold text-xs shrink-0">
+                    {agentProfile.readiness_score}%
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-900">Profile Readiness</span>
+                      <span className={`px-2 py-0.2 rounded-full font-semibold text-[10px] ${
+                        agentProfile.readiness_score >= 75 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'
+                      }`}>
+                        {agentProfile.readiness_score === 100 ? 'Fully Verified' : 'Profile Active'}
+                      </span>
+                    </div>
+                    <p className="text-slate-500 mt-0.5 text-[11px]">
+                      Verified agent profile. Browse available tasks below to qualify and apply.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 self-end sm:self-center">
+                  {agentProfile.readiness_checks && (
+                    <div className="flex items-center gap-1.5">
+                      {!agentProfile.readiness_checks.certification && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200 font-medium">
+                          Add Certification
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => navigate('/profile')}
+                    className="font-bold text-[#3B50BA] hover:underline text-xs whitespace-nowrap cursor-pointer ml-1"
+                  >
+                    View Profile &rarr;
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Error Banner with Retry (Distinguishes actual errors from empty 0s) */}
             {dashboardError && !isLoadingTasks && (
               <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 flex items-center justify-between gap-3 text-sm text-rose-800">
@@ -810,16 +797,16 @@ export const AgentDashboard = () => {
                   ) : (
                     <div className="flex items-baseline gap-2">
                       <span className="text-3xl font-bold text-slate-900 tracking-tight">
-                        {availableCount}
+                        {tasks.length}
                       </span>
                       <span className="text-xs text-slate-400 font-medium">
-                        eligible now
+                        opportunities
                       </span>
                     </div>
                   )}
                 </div>
                 <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                  <span className="text-slate-500">Ready to apply</span>
+                  <span className="text-slate-500">{availableCount} ready to apply</span>
                   <button
                     type="button"
                     onClick={() => {
@@ -945,59 +932,6 @@ export const AgentDashboard = () => {
                 </div>
               </div>
             </div>
-
-            {/* Contextual Next Action Banner */}
-            <div className={`rounded-2xl border p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all ${
-              nextAction.type === 'action'
-                ? 'bg-gradient-to-r from-amber-50/90 to-orange-50/50 border-amber-200/80 text-amber-950'
-                : nextAction.type === 'opportunity'
-                ? 'bg-gradient-to-r from-blue-50/90 to-indigo-50/50 border-blue-200/80 text-slate-900'
-                : nextAction.type === 'info'
-                ? 'bg-gradient-to-r from-sky-50/90 to-blue-50/50 border-sky-200/80 text-sky-950'
-                : 'bg-white border-slate-200 text-slate-800'
-            }`}>
-              <div className="flex items-start gap-3.5">
-                <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5 shadow-2xs ${
-                  nextAction.type === 'action'
-                    ? 'bg-amber-100 text-amber-700'
-                    : nextAction.type === 'opportunity'
-                    ? 'bg-[#EEF2FF] text-[#3B50BA]'
-                    : 'bg-slate-100 text-slate-600'
-                }`}>
-                  {React.createElement(nextAction.icon, { className: 'w-4 h-4' })}
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h4 className="text-sm font-bold tracking-tight">
-                      {nextAction.title}
-                    </h4>
-                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-white/80 border border-current/20">
-                      {nextAction.badge}
-                    </span>
-                  </div>
-                  <p className="text-xs sm:text-sm text-slate-600 mt-1 max-w-2xl leading-relaxed">
-                    {nextAction.description}
-                  </p>
-                </div>
-              </div>
-
-              <div className="shrink-0 sm:self-center">
-                <button
-                  type="button"
-                  onClick={nextAction.onCta}
-                  className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer active:scale-98 ${
-                    nextAction.type === 'action'
-                      ? 'bg-amber-600 hover:bg-amber-700 text-white'
-                      : nextAction.type === 'opportunity'
-                      ? 'bg-[#3B50BA] hover:bg-[#31429e] text-white'
-                      : 'bg-slate-900 hover:bg-slate-800 text-white'
-                  }`}
-                >
-                  <span>{nextAction.ctaText}</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
           </section>
 
           {/* Section: Tasks for You */}
@@ -1011,24 +945,44 @@ export const AgentDashboard = () => {
               </p>
             </div>
 
-            {/* Informative banner for unassessed agent */}
-            {!hasCompletedAssessment && !isCheckingStatus && (
-              <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs sm:text-sm text-amber-900">
-                <div className="flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>
-                    Competency assessment required. Complete your evaluation to verify your profile and unlock task application readiness.
-                  </span>
-                </div>
+            {/* Task Filter Tabs */}
+            <div className="flex items-center justify-between gap-3 pt-1">
+              <div className="flex items-center gap-2 overflow-x-auto pb-1">
                 <button
                   type="button"
-                  onClick={() => setIsAssessmentModalOpen(true)}
-                  className="font-bold text-[#3B50BA] hover:underline whitespace-nowrap shrink-0 self-start sm:self-auto cursor-pointer"
+                  onClick={() => setTaskFilter('all')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+                    taskFilter === 'all'
+                      ? 'bg-[#3B50BA] text-white shadow-xs'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
                 >
-                  Take Assessment &rarr;
+                  All Opportunities ({tasks.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTaskFilter('eligible')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+                    taskFilter === 'eligible'
+                      ? 'bg-[#3B50BA] text-white shadow-xs'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  Ready to Apply ({availableCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTaskFilter('assessment_needed')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+                    taskFilter === 'assessment_needed'
+                      ? 'bg-[#3B50BA] text-white shadow-xs'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  Assessments Needed ({assessmentNeededCount})
                 </button>
               </div>
-            )}
+            </div>
 
             {/* Tasks Grid */}
             {isLoadingTasks ? (
@@ -1042,69 +996,162 @@ export const AgentDashboard = () => {
                   </div>
                 ))}
               </div>
-            ) : tasks.length > 0 ? (
+            ) : filteredTasks.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                {tasks.map((task) => (
-                  <div 
-                    key={task.task_id || task.id} 
-                    className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col justify-between hover:border-slate-300 transition-colors"
-                  >
-                    <div>
-                      <div className="flex items-start justify-between gap-2">
-                        <h3 className="text-base sm:text-lg font-bold text-slate-900 leading-snug">
-                          {task.title}
-                        </h3>
-                        {getTaskStateBadge(task)}
+                {filteredTasks.map((task) => {
+                  const isAssessmentPassed = task.exam_status === 'Passed' || task.prerequisites?.assessment_met;
+                  const examName = task.exam_name || (task.exam_id === 3 ? 'Customer Support Diagnostic Assessment' : 'VerifyMesh Competency Assessment');
+                  const examPassingScore = task.exam_passing_score ?? 70;
+
+                  return (
+                    <div 
+                      key={task.task_id || task.id} 
+                      className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col justify-between hover:border-slate-300 transition-colors"
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <h3 className="text-base sm:text-lg font-bold text-slate-900 leading-snug">
+                              {task.title}
+                            </h3>
+                            {task.category && (
+                              <span className="text-xs text-slate-400 font-medium">{task.category}</span>
+                            )}
+                          </div>
+                          {getTaskStateBadge(task)}
+                        </div>
+
+                        <p className="text-sm text-slate-500 mt-2 leading-relaxed line-clamp-2">
+                          {task.description}
+                        </p>
+
+                        {/* Task-Driven Assessment Topic Box */}
+                        <div className={`mt-4 p-3 rounded-xl border text-xs ${
+                          isAssessmentPassed 
+                            ? 'bg-emerald-50/50 border-emerald-200/80' 
+                            : 'bg-blue-50/40 border-blue-100'
+                        }`}>
+                          <div className="flex items-center justify-between text-[11px] font-semibold text-slate-500 mb-1.5">
+                            <span className="uppercase tracking-wider text-[#3B50BA]">
+                              Required Qualification {task.required_topics?.length > 1 ? `(${task.required_topics.length} Topics)` : 'Assessment'}
+                            </span>
+                            <span className="text-slate-400">
+                              {task.topics_total ? `${task.topics_passed_count || 0}/${task.topics_total} Passed` : '5 Questions'}
+                            </span>
+                          </div>
+
+                          {task.required_topics && task.required_topics.length > 0 ? (
+                            <div className="space-y-1.5">
+                              {task.required_topics.map(rt => (
+                                <div key={rt.topic_id} className="flex items-center justify-between gap-2">
+                                  <span className="font-semibold text-slate-900 truncate text-[11px]" title={rt.name}>
+                                    {rt.name}
+                                  </span>
+                                  <span className={`px-2 py-0.2 rounded-full text-[10px] font-bold border shrink-0 ${
+                                    rt.status === 'Passed'
+                                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                      : rt.status === 'Failed'
+                                      ? 'bg-rose-100 text-rose-800 border-rose-300'
+                                      : 'bg-amber-100 text-amber-800 border-amber-300'
+                                  }`}>
+                                    {rt.status === 'Passed'
+                                      ? `✓ Passed (${rt.latest_score}%)`
+                                      : rt.status === 'Failed'
+                                      ? `✗ Failed (${rt.latest_score}%)`
+                                      : `Needed (≥${rt.passing_threshold}%)`}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-bold text-slate-900 truncate" title={examName}>
+                                {examName}
+                              </span>
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border shrink-0 ${
+                                isAssessmentPassed
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                  : task.exam_status === 'Failed'
+                                  ? 'bg-rose-100 text-rose-800 border-rose-300'
+                                  : 'bg-amber-100 text-amber-800 border-amber-300'
+                              }`}>
+                                {isAssessmentPassed 
+                                  ? (task.exam_score !== null && task.exam_score !== undefined ? `✓ Passed (${task.exam_score}%)` : '✓ Passed') 
+                                  : task.exam_status === 'Failed'
+                                  ? `✗ Failed (${task.exam_score}%)`
+                                  : `Needed (≥${examPassingScore}%)`}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Requirements Grid */}
+                        <div className="grid grid-cols-2 gap-3 mt-3.5 pt-2 border-t border-slate-100">
+                          <div>
+                            <span className="text-[11px] text-slate-400 font-medium block">Required competency</span>
+                            <p className="text-xs font-bold text-slate-900 mt-0.5">
+                              {task.requiredCompetency || task.required_competency || 'Eligible'}
+                            </p>
+                          </div>
+                          <div>
+                            <span className="text-[11px] text-slate-400 font-medium block">Certification</span>
+                            <p className="text-xs font-bold text-slate-900 mt-0.5 truncate" title={task.required_certification}>
+                              {task.required_certification || 'None required'}
+                            </p>
+                          </div>
+                        </div>
+
+                        {task.blocking_reason && !task.can_apply && (!task.application_status || task.application_status === 'Not Applied') && (
+                          <div className="mt-3.5 p-2 rounded-lg bg-amber-50/70 border border-amber-100 text-[11px] text-amber-800 leading-snug flex items-start gap-1.5">
+                            <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                            <span>{task.blocking_reason}</span>
+                          </div>
+                        )}
                       </div>
-                      <p className="text-sm text-slate-500 mt-2 leading-relaxed">
-                        {task.description}
-                      </p>
 
-                      <div className="grid grid-cols-2 gap-4 mt-6 pt-2">
+                      <div className="pt-4 flex items-center justify-between border-t border-slate-100 mt-4">
                         <div>
-                          <span className="text-xs text-slate-400 font-medium block">Required competency</span>
-                          <p className="text-sm font-bold text-slate-900 mt-1">
-                            {task.requiredCompetency || task.required_competency || 'Competent'}
-                          </p>
+                          <span className="text-xs font-semibold text-slate-600 block">
+                            {task.payout || '$30 - $40 / hr'}
+                          </span>
+                          <span className="text-[10px] text-slate-400">
+                            {task.work_arrangement || 'Remote'}
+                          </span>
                         </div>
-                        <div>
-                          <span className="text-xs text-slate-400 font-medium block">Certification</span>
-                          <p className="text-sm font-bold text-slate-900 mt-1 leading-snug">
-                            {task.required_certifications && task.required_certifications.length > 0 
-                              ? task.required_certifications.join(', ') 
-                              : 'Not required'}
-                          </p>
+
+                        <div className="flex items-center gap-2">
+                          {task.state === 'Assessment Needed' ? (
+                            <button
+                              type="button"
+                              onClick={() => openAssessmentForTask(task)}
+                              className="px-3 py-1.5 bg-[#3B50BA] hover:bg-[#31429e] text-white text-xs font-semibold rounded-xl shadow-xs transition-colors flex items-center gap-1 cursor-pointer"
+                            >
+                              <span>Take Assessment</span>
+                              <ArrowRight className="w-3 h-3" />
+                            </button>
+                          ) : task.state === 'Ready to Apply' || task.can_apply ? (
+                            <button
+                              type="button"
+                              onClick={() => openTaskModal(task)}
+                              className="px-3 py-1.5 bg-[#3B50BA] hover:bg-[#31429e] text-white text-xs font-semibold rounded-xl shadow-xs transition-colors flex items-center gap-1 cursor-pointer"
+                            >
+                              <span>Apply Now</span>
+                              <ArrowRight className="w-3 h-3" />
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => openTaskModal(task)}
+                              className="text-xs font-semibold text-[#3B50BA] hover:underline cursor-pointer"
+                            >
+                              View details &rarr;
+                            </button>
+                          )}
                         </div>
                       </div>
-
-                      {task.blocking_reason && !task.can_apply && (!task.application_status || task.application_status === 'Not Applied') && (
-                        <div className="mt-3.5 p-2 rounded-lg bg-amber-50/70 border border-amber-100 text-[11px] text-amber-800 leading-snug flex items-start gap-1.5">
-                          <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
-                          <span>{task.blocking_reason}</span>
-                        </div>
-                      )}
                     </div>
-
-                    <div className="pt-5 flex items-center justify-between border-t border-slate-100 mt-4">
-                      <span className="text-xs font-semibold text-slate-600">
-                        {task.payout || '$30 - $40 / hr'}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => openTaskModal(task)}
-                        className={`text-sm font-semibold inline-flex items-center gap-1 cursor-pointer transition-colors ${
-                          task.state === 'Ready to Apply' || task.can_apply
-                            ? 'text-[#3B50BA] hover:text-[#31429e] hover:underline'
-                            : task.state === 'Assigned'
-                            ? 'text-emerald-700 hover:text-emerald-800'
-                            : 'text-slate-600 hover:text-slate-900 hover:underline'
-                        }`}
-                      >
-                        {getTaskActionText(task)}
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className="bg-white rounded-2xl border border-dashed border-slate-250 p-8 sm:p-12 text-center shadow-xs flex flex-col items-center justify-center">
@@ -1112,85 +1159,24 @@ export const AgentDashboard = () => {
                   <Briefcase className="w-7 h-7" />
                 </div>
                 <h3 className="text-base sm:text-lg font-bold text-slate-900 mb-1.5">
-                  No opportunities currently available
+                  No opportunities match your filter
                 </h3>
                 <p className="text-sm text-slate-500 max-w-md mx-auto leading-relaxed">
-                  Check back soon for new task postings matching your domain profile.
+                  Try switching back to 'All Opportunities' to view all available tasks.
                 </p>
               </div>
             )}
-          </section>
-
-          {/* Section: Recent Activity (Backed by actual audit logs) */}
-          <section className="space-y-3 pt-2">
-            <h2 className="text-lg font-bold text-slate-900 tracking-tight">
-              Recent Activity
-            </h2>
-            <div className="bg-white rounded-2xl border border-slate-200/80 divide-y divide-slate-100 overflow-hidden shadow-xs">
-              {isLoadingActivities ? (
-                <div className="p-4 animate-pulse space-y-2">
-                  <div className="h-4 bg-slate-100 rounded-sm w-3/4" />
-                  <div className="h-4 bg-slate-100 rounded-sm w-1/2" />
-                </div>
-              ) : recentActivities.length > 0 ? (
-                recentActivities.map((activity) => (
-                  <div 
-                    key={activity.id}
-                    className="p-4 sm:px-6 flex items-center justify-between hover:bg-slate-50/50 transition-colors"
-                  >
-                    <div className="flex items-center gap-3.5">
-                      <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${
-                        activity.isPending 
-                          ? 'bg-slate-100 text-slate-400' 
-                          : 'bg-[#ECFDF5] text-[#059669]'
-                      }`}>
-                        {activity.isPending ? (
-                          <Clock className="w-3.5 h-3.5" />
-                        ) : (
-                          <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                        )}
-                      </div>
-                      <span className="text-sm font-medium text-slate-800">
-                        {activity.title}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {activity.isNew && (
-                        <span className="text-[10px] font-bold uppercase tracking-wider bg-blue-50 text-[#3B50BA] px-2 py-0.5 rounded-full border border-blue-200">
-                          New
-                        </span>
-                      )}
-                      <span className="text-xs sm:text-sm text-slate-400">
-                        {activity.time}
-                      </span>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="p-6 text-center text-sm text-slate-400">
-                  No recent activity logged yet.
-                </div>
-              )}
-            </div>
           </section>
         </main>
       </div>
 
       {/* Modals */}
-      <TakeAssessmentModal
-        isOpen={isAssessmentModalOpen}
-        onClose={() => setIsAssessmentModalOpen(false)}
-        onAssessmentComplete={handleAssessmentComplete}
-        currentData={formData}
-        userId={user?.id}
-      />
-
       <CompetencyDetailsModal
         isOpen={isDetailsModalOpen}
         onClose={() => setIsDetailsModalOpen(false)}
         prediction={predictionData}
         formData={formData}
-        onOpenAssessment={() => setIsAssessmentModalOpen(true)}
+        onOpenAssessment={() => openAssessmentForTask()}
       />
 
       <TaskModal
@@ -1198,7 +1184,7 @@ export const AgentDashboard = () => {
         onClose={() => setIsTaskModalOpen(false)}
         task={selectedTask}
         userCompetency={currentCompetency || 'Not Yet Assessed'}
-        onOpenAssessment={() => setIsAssessmentModalOpen(true)}
+        onOpenAssessment={(t) => openAssessmentForTask(t || selectedTask)}
         onApplySuccess={handleApplySuccess}
       />
 

@@ -19,7 +19,8 @@ import {
   Award,
   ExternalLink,
   X,
-  HelpCircle
+  HelpCircle,
+  Trash2
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { BrandLogo } from '../components/auth/BrandLogo';
@@ -64,7 +65,7 @@ export const AdminDashboard = () => {
 
   const [taskSearch, setTaskSearch] = useState('');
   const [taskCategoryFilter, setTaskCategoryFilter] = useState('ALL');
-  const [taskStatusFilter, setTaskStatusFilter] = useState('ALL');
+  const [taskStatusFilter, setTaskStatusFilter] = useState('ACTIVE');
 
   const [assessmentSearch, setAssessmentSearch] = useState('');
   const [assessmentCompFilter, setAssessmentCompFilter] = useState('ALL');
@@ -83,6 +84,11 @@ export const AdminDashboard = () => {
   const [reviewDetail, setReviewDetail] = useState(null);
   const [isLoadingReviewDetail, setIsLoadingReviewDetail] = useState(false);
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
+
+  // Delete Task Modal State
+  const [taskToDelete, setTaskToDelete] = useState(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isDeletingTask, setIsDeletingTask] = useState(false);
 
   // Fetch all initial data
   const fetchData = async () => {
@@ -192,20 +198,23 @@ export const AdminDashboard = () => {
   // Helper for Competency Badge Styling
   const getCompetencyBadgeStyle = (competency) => {
     switch (competency) {
+      case 'ELIGIBLE':
+      case 'Eligible':
       case 'COMPETENT':
       case 'ADVANCED':
       case 'Competent':
       case 'Advanced':
-      case 'Eligible':
         return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-      case 'BASIC':
-      case 'Basic':
-      case 'Send to Review':
-        return 'bg-amber-50 text-amber-700 border-amber-200';
+      case 'NOT_ELIGIBLE':
+      case 'Not Eligible':
       case 'NEEDS_IMPROVEMENT':
       case 'Needs Improvement':
       case 'Ineligible':
         return 'bg-rose-50 text-rose-700 border-rose-200';
+      case 'BASIC':
+      case 'Basic':
+      case 'Send to Review':
+        return 'bg-amber-50 text-amber-700 border-amber-200';
       default:
         return 'bg-slate-50 text-slate-600 border-slate-200';
     }
@@ -256,11 +265,37 @@ export const AdminDashboard = () => {
     const newStatus = task.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
     try {
       await adminService.setTaskStatus(task.task_id, newStatus);
-      showToast(`Task "${task.task_name}" status set to ${newStatus}.`);
+      showToast(
+        newStatus === 'INACTIVE'
+          ? `Task "${task.task_name}" deactivated and removed from active view.`
+          : `Task "${task.task_name}" activated.`
+      );
       const tasksRes = await adminService.getTasks();
       if (tasksRes?.data) setTasksList(tasksRes.data);
     } catch (err) {
       showToast(`Error changing task status: ${err.message}`);
+    }
+  };
+
+  const openDeleteTaskModal = (task) => {
+    setTaskToDelete(task);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDeleteTask = async () => {
+    if (!taskToDelete) return;
+    setIsDeletingTask(true);
+    try {
+      await adminService.deleteTask(taskToDelete.task_id);
+      showToast(`Task "${taskToDelete.task_name}" permanently deleted.`);
+      setIsDeleteModalOpen(false);
+      setTaskToDelete(null);
+      const tasksRes = await adminService.getTasks();
+      if (tasksRes?.data) setTasksList(tasksRes.data);
+    } catch (err) {
+      showToast(err?.response?.data?.error || err.message || 'Failed to delete task.');
+    } finally {
+      setIsDeletingTask(false);
     }
   };
 
@@ -295,7 +330,10 @@ export const AdminDashboard = () => {
 
       const matchesComp = 
         agentCompFilter === 'ALL' || 
-        (agentCompFilter === 'UNASSESSED' ? !agent.predicted_competency : agent.predicted_competency === agentCompFilter);
+        (agentCompFilter === 'UNASSESSED' ? !agent.predicted_competency :
+         agentCompFilter === 'ELIGIBLE' ? ['ELIGIBLE', 'COMPETENT', 'ADVANCED', 'Eligible', 'Competent', 'Advanced'].includes(agent.predicted_competency) :
+         agentCompFilter === 'NOT_ELIGIBLE' ? ['NOT_ELIGIBLE', 'NEEDS_IMPROVEMENT', 'BASIC', 'Not Eligible', 'Needs Improvement', 'Ineligible'].includes(agent.predicted_competency) :
+         agent.predicted_competency === agentCompFilter);
 
       return matchesSearch && matchesStatus && matchesComp;
     });
@@ -326,7 +364,10 @@ export const AdminDashboard = () => {
         item.agent_email?.toLowerCase().includes(assessmentSearch.toLowerCase());
 
       const matchesComp = 
-        assessmentCompFilter === 'ALL' || item.predicted_competency === assessmentCompFilter;
+        assessmentCompFilter === 'ALL' ||
+        (assessmentCompFilter === 'ELIGIBLE' ? ['ELIGIBLE', 'COMPETENT', 'ADVANCED', 'Eligible', 'Competent', 'Advanced'].includes(item.predicted_competency) :
+         assessmentCompFilter === 'NOT_ELIGIBLE' ? ['NOT_ELIGIBLE', 'NEEDS_IMPROVEMENT', 'BASIC', 'Not Eligible', 'Needs Improvement', 'Ineligible'].includes(item.predicted_competency) :
+         item.predicted_competency === assessmentCompFilter);
 
       return matchesSearch && matchesComp;
     });
@@ -826,9 +867,8 @@ export const AdminDashboard = () => {
                         className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-medium text-slate-700 bg-white focus:outline-none focus:border-[#3B50BA]"
                       >
                         <option value="ALL">All Competencies</option>
-                        <option value="COMPETENT">Competent / Eligible</option>
-                        <option value="BASIC">Basic / In Review</option>
-                        <option value="NEEDS_IMPROVEMENT">Needs Improvement</option>
+                        <option value="ELIGIBLE">Eligible</option>
+                        <option value="NOT_ELIGIBLE">Not Eligible</option>
                         <option value="UNASSESSED">Unassessed</option>
                       </select>
 
@@ -1014,9 +1054,9 @@ export const AdminDashboard = () => {
                         onChange={(e) => setTaskStatusFilter(e.target.value)}
                         className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-medium text-slate-700 bg-white focus:outline-none focus:border-[#3B50BA]"
                       >
+                        <option value="ACTIVE">Active Tasks (Default)</option>
+                        <option value="INACTIVE">Inactive Tasks</option>
                         <option value="ALL">All Statuses</option>
-                        <option value="ACTIVE">Active</option>
-                        <option value="INACTIVE">Inactive</option>
                         <option value="DRAFT">Draft</option>
                         <option value="COMPLETED">Completed</option>
                       </select>
@@ -1135,6 +1175,15 @@ export const AdminDashboard = () => {
                               >
                                 Edit Task
                               </Button>
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => openDeleteTaskModal(t)}
+                                className="text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200"
+                              >
+                                <Trash2 className="w-3.5 h-3.5 mr-1" />
+                                Delete
+                              </Button>
                             </div>
                           </div>
                         </div>
@@ -1199,9 +1248,8 @@ export const AdminDashboard = () => {
                       className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-medium text-slate-700 bg-white focus:outline-none focus:border-[#3B50BA]"
                     >
                       <option value="ALL">All Predicted Classes</option>
-                      <option value="COMPETENT">Competent / Eligible</option>
-                      <option value="BASIC">Basic / Send to Review</option>
-                      <option value="NEEDS_IMPROVEMENT">Needs Improvement</option>
+                      <option value="ELIGIBLE">Eligible</option>
+                      <option value="NOT_ELIGIBLE">Not Eligible</option>
                     </select>
                   </div>
 
@@ -1298,7 +1346,7 @@ export const AdminDashboard = () => {
                         Eligibility Reviews
                       </h1>
                       <p className="text-sm text-slate-500 mt-1">
-                        Oversee boundary predictions (Basic / Send to Review) and multi-criteria rule compliance for task eligibility.
+                        Oversee binary gatekeeper predictions (Eligible / Not Eligible) and multi-criteria rule compliance for task eligibility.
                       </p>
                     </div>
                     <div className="text-xs text-slate-500 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200/80 self-start sm:self-auto">
@@ -1922,6 +1970,59 @@ export const AdminDashboard = () => {
               onClick={handleSubmitRejection}
             >
               {isReviewingAction ? 'Submitting...' : 'Confirm Rejection'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ========================================================= */}
+      {/* MODAL: DELETE TASK CONFIRMATION */}
+      {/* ========================================================= */}
+      <Modal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          if (!isDeletingTask) {
+            setIsDeleteModalOpen(false);
+            setTaskToDelete(null);
+          }
+        }}
+        title="Delete Task"
+      >
+        <div className="space-y-4 text-xs sm:text-sm text-slate-700">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0 border border-rose-100">
+              <AlertCircle className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="font-semibold text-slate-900 text-sm">
+                Are you sure you want to delete &ldquo;{taskToDelete?.task_name}&rdquo;?
+              </p>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                This action is permanent and cannot be undone. The task, its requirements, topic links, and evaluation associations will be permanently removed from both the admin portal and agent dashboards.
+              </p>
+            </div>
+          </div>
+
+          <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setIsDeleteModalOpen(false);
+                setTaskToDelete(null);
+              }}
+              disabled={isDeletingTask}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleConfirmDeleteTask}
+              isLoading={isDeletingTask}
+              className="bg-rose-600 hover:bg-rose-700 text-white font-medium"
+            >
+              Delete Permanently
             </Button>
           </div>
         </div>

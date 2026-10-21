@@ -7,6 +7,8 @@ import { AgentDashboard } from './pages/AgentDashboard';
 import { ProfilePage } from './pages/ProfilePage';
 import { AdminDashboard } from './pages/AdminDashboard';
 import { CreateTaskPage } from './pages/CreateTaskPage';
+import { AssessmentPage } from './pages/AssessmentPage';
+import { AssessmentResultsPage } from './pages/AssessmentResultsPage';
 
 // Protected Route wrapper that redirects unauthenticated users
 const ProtectedRoute = ({ children, allowedRole }) => {
@@ -104,6 +106,46 @@ export default function App() {
             element={
               <ProtectedRoute allowedRole="Agent">
                 <Navigate to="/dashboard" replace />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/agent/assessment/:taskId"
+            element={
+              <ProtectedRoute allowedRole="Agent">
+                <AssessmentPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/agent/assessment"
+            element={
+              <ProtectedRoute allowedRole="Agent">
+                <AssessmentPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/agent/assessments/:taskId"
+            element={
+              <ProtectedRoute allowedRole="Agent">
+                <AssessmentPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/agent/assessment/results/:attemptId"
+            element={
+              <ProtectedRoute allowedRole="Agent">
+                <AssessmentResultsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/agent/assessments/results/:attemptId"
+            element={
+              <ProtectedRoute allowedRole="Agent">
+                <AssessmentResultsPage />
               </ProtectedRoute>
             }
           />

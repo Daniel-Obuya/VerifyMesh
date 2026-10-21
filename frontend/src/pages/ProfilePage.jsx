@@ -34,7 +34,6 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { competencyService } from '../services/competencyService';
 import { Button } from '../components/ui/Button';
-import { TakeAssessmentModal } from '../components/dashboard/TakeAssessmentModal';
 
 export const ProfilePage = () => {
   const { user, logout } = useAuth();
@@ -42,7 +41,6 @@ export const ProfilePage = () => {
 
   // Navigation & Dropdown states
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-  const [isAssessmentModalOpen, setIsAssessmentModalOpen] = useState(false);
 
   // Core Data States
   const [isLoading, setIsLoading] = useState(true);
@@ -268,17 +266,22 @@ export const ProfilePage = () => {
   // Competency Styling Helper
   const getCompetencyBadgeStyle = (comp) => {
     switch (comp) {
+      case 'ELIGIBLE':
+      case 'Eligible':
       case 'ADVANCED':
       case 'Advanced':
       case 'COMPETENT':
       case 'Competent':
         return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+      case 'NOT_ELIGIBLE':
+      case 'Not Eligible':
+      case 'NEEDS_IMPROVEMENT':
+      case 'Needs Improvement':
+      case 'Ineligible':
+        return 'bg-rose-50 text-rose-700 border-rose-200';
       case 'BASIC':
       case 'Basic':
         return 'bg-blue-50 text-blue-700 border-blue-200';
-      case 'NEEDS_IMPROVEMENT':
-      case 'Needs Improvement':
-        return 'bg-rose-50 text-rose-700 border-rose-200';
       default:
         return 'bg-slate-100 text-slate-600 border-slate-200';
     }
@@ -287,12 +290,15 @@ export const ProfilePage = () => {
   const getDecisionBadge = (decision) => {
     switch (decision) {
       case 'Eligible':
-        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">Eligible (Auto-Approve)</span>;
+      case 'ELIGIBLE':
+        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">Eligible (ML Verified)</span>;
+      case 'Not Eligible':
+      case 'NOT_ELIGIBLE':
+      case 'Ineligible':
+        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">Not Eligible</span>;
       case 'Send to Review':
       case 'Borderline':
-        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">Send to Review (Human Verification)</span>;
-      case 'Ineligible':
-        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">Ineligible</span>;
+        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">Verification Pending</span>;
       default:
         return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">{decision || 'Pending'}</span>;
     }
@@ -564,9 +570,6 @@ export const ProfilePage = () => {
                 <Button variant="secondary" size="sm" onClick={() => navigate('/dashboard')}>
                   Back to Dashboard
                 </Button>
-                <Button size="sm" onClick={() => setIsAssessmentModalOpen(true)}>
-                  {assessmentSummary.has_assessed ? 'Retake Assessment' : 'Take Initial Assessment'}
-                </Button>
               </div>
             </div>
 
@@ -578,11 +581,11 @@ export const ProfilePage = () => {
                     Profile Readiness Score
                   </span>
                   <span className="text-xs text-slate-400">
-                    (4 Core Verification Pillars)
+                    (3 Core Verification Pillars)
                   </span>
                 </div>
                 <span className="text-sm font-bold text-[#3B50BA]">
-                  {profileData?.readiness_score ?? 75}% Complete
+                  {profileData?.readiness_score ?? 0}% Complete
                 </span>
               </div>
 
@@ -590,30 +593,25 @@ export const ProfilePage = () => {
               <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
                 <div 
                   className="bg-[#3B50BA] h-2.5 rounded-full transition-all duration-500 ease-out" 
-                  style={{ width: `${profileData?.readiness_score ?? 75}%` }}
+                  style={{ width: `${profileData?.readiness_score ?? 0}%` }}
                 />
               </div>
 
               {/* Pillar Checklist */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4 text-xs">
                 <div className={`p-2.5 rounded-xl border flex items-center gap-2 ${profileData?.readiness_checks?.personal_info ? 'bg-emerald-50/60 border-emerald-200 text-emerald-800' : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
                   {profileData?.readiness_checks?.personal_info ? <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> : <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />}
                   <span className="font-medium">1. Contact &amp; Bio</span>
                 </div>
 
-                <div className={`p-2.5 rounded-xl border flex items-center gap-2 ${profileData?.readiness_checks?.assessment ? 'bg-emerald-50/60 border-emerald-200 text-emerald-800' : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
-                  {profileData?.readiness_checks?.assessment ? <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> : <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />}
-                  <span className="font-medium">2. Competency Battery</span>
-                </div>
-
                 <div className={`p-2.5 rounded-xl border flex items-center gap-2 ${profileData?.readiness_checks?.experience ? 'bg-emerald-50/60 border-emerald-200 text-emerald-800' : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
                   {profileData?.readiness_checks?.experience ? <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> : <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />}
-                  <span className="font-medium">3. Verified Experience</span>
+                  <span className="font-medium">2. Verified Experience</span>
                 </div>
 
                 <div className={`p-2.5 rounded-xl border flex items-center gap-2 ${profileData?.readiness_checks?.certification ? 'bg-emerald-50/60 border-emerald-200 text-emerald-800' : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
                   {profileData?.readiness_checks?.certification ? <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> : <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />}
-                  <span className="font-medium">4. Certifications</span>
+                  <span className="font-medium">3. Certifications</span>
                 </div>
               </div>
             </div>
@@ -1111,135 +1109,6 @@ export const ProfilePage = () => {
             </div>
           </div>
 
-          {/* ================================================================= */}
-          {/* SECTION 5: COMPETENCY BATTERY & MODEL INPUTS */}
-          {/* ================================================================= */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-8 shadow-xs space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
-              <div>
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-5 h-5 text-[#3B50BA]" />
-                  <h2 className="text-lg font-bold text-slate-900">Competency Assessment Battery &amp; ML Contract</h2>
-                </div>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Latest battery results feeding the Random Forest inference engine alongside your verified experience and credentials.
-                </p>
-              </div>
-
-              <Button 
-                size="sm" 
-                variant="secondary"
-                onClick={() => setIsAssessmentModalOpen(true)}
-                className="shrink-0"
-              >
-                {assessmentSummary.has_assessed ? 'Retake Assessment Battery' : 'Take Initial Battery'}
-              </Button>
-            </div>
-
-            {/* Assessment Battery Outcomes */}
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-                  Overall Battery Score
-                </span>
-                <p className="text-2xl font-bold text-slate-900 mt-1">
-                  {assessmentSummary.overall_score ? `${assessmentSummary.overall_score}%` : 'Not Assessed'}
-                </p>
-                {assessmentSummary.completed_at && (
-                  <p className="text-[10px] text-slate-400 mt-0.5">
-                    Evaluated on {new Date(assessmentSummary.completed_at).toLocaleDateString()}
-                  </p>
-                )}
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-                  Predicted Competency
-                </span>
-                <div className="mt-1 flex items-center gap-2">
-                  <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${getCompetencyBadgeStyle(assessmentSummary.competency_level)}`}>
-                    {assessmentSummary.competency_level}
-                  </span>
-                  {assessmentSummary.confidence && (
-                    <span className="text-xs text-slate-500 font-mono">
-                      ({Math.round(assessmentSummary.confidence > 1 ? assessmentSummary.confidence : assessmentSummary.confidence * 100)}%)
-                    </span>
-                  )}
-                </div>
-                <p className="text-[10px] text-slate-400 mt-1">Random Forest 3-class classifier</p>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-                  3-Way Decision Outcome
-                </span>
-                <div className="mt-1">
-                  {getDecisionBadge(assessmentSummary.evaluation_decision)}
-                </div>
-                <p className="text-[10px] text-slate-400 mt-1">Eligible / Review / Ineligible</p>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-                  Attempt History
-                </span>
-                <p className="text-2xl font-bold text-slate-900 mt-1">
-                  #{assessmentSummary.attempt_number || 1}
-                </p>
-                <p className="text-[10px] text-slate-400 mt-0.5">Cumulative evaluations</p>
-              </div>
-            </div>
-
-            {/* 4 Assessment Subscores */}
-            <div>
-              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block mb-3">
-                Core Domain Competency Subscores
-              </span>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
-                <div className="p-3 rounded-xl border border-slate-200/80 bg-slate-50/60">
-                  <span className="text-[11px] text-slate-500 block font-medium">Communication</span>
-                  <p className="text-lg font-bold text-slate-900 mt-0.5">
-                    {assessmentSummary.scores?.communication ? `${assessmentSummary.scores.communication}%` : '—'}
-                  </p>
-                </div>
-
-                <div className="p-3 rounded-xl border border-slate-200/80 bg-slate-50/60">
-                  <span className="text-[11px] text-slate-500 block font-medium">Product Knowledge</span>
-                  <p className="text-lg font-bold text-slate-900 mt-0.5">
-                    {assessmentSummary.scores?.product_knowledge ? `${assessmentSummary.scores.product_knowledge}%` : '—'}
-                  </p>
-                </div>
-
-                <div className="p-3 rounded-xl border border-slate-200/80 bg-slate-50/60">
-                  <span className="text-[11px] text-slate-500 block font-medium">Sales Skills</span>
-                  <p className="text-lg font-bold text-slate-900 mt-0.5">
-                    {assessmentSummary.scores?.sales_skill ? `${assessmentSummary.scores.sales_skill}%` : '—'}
-                  </p>
-                </div>
-
-                <div className="p-3 rounded-xl border border-slate-200/80 bg-slate-50/60">
-                  <span className="text-[11px] text-slate-500 block font-medium">Customer Service</span>
-                  <p className="text-lg font-bold text-slate-900 mt-0.5">
-                    {assessmentSummary.scores?.customer_service ? `${assessmentSummary.scores.customer_service}%` : '—'}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Model Vector Contract Explanation */}
-            <div className="p-4 rounded-xl bg-indigo-50/50 border border-indigo-100 text-xs text-indigo-950 space-y-2">
-              <div className="flex items-center gap-2 font-bold text-[#3B50BA]">
-                <Layers className="w-4 h-4" />
-                <span>Model Contract Transparency</span>
-              </div>
-              <p className="leading-relaxed text-slate-600">
-                VerifyMesh preserves the exact 11-feature contract of <strong className="font-mono text-slate-800">threeway_decision_model.joblib</strong>:
-                Experience months (<code className="font-mono text-[11px] bg-white px-1.5 py-0.5 rounded border border-indigo-100">previous_experience_months</code>, <code className="font-mono text-[11px] bg-white px-1.5 py-0.5 rounded border border-indigo-100">sales_experience_months</code>, <code className="font-mono text-[11px] bg-white px-1.5 py-0.5 rounded border border-indigo-100">customer_service_experience_months</code>) 
-                and certifications (<code className="font-mono text-[11px] bg-white px-1.5 py-0.5 rounded border border-indigo-100">certification_count</code>, <code className="font-mono text-[11px] bg-white px-1.5 py-0.5 rounded border border-indigo-100">relevant_certification</code>, <code className="font-mono text-[11px] bg-white px-1.5 py-0.5 rounded border border-indigo-100">certified_leverage</code>) 
-                are automatically populated from your verified database records rather than unverified form inputs.
-              </p>
-            </div>
-          </div>
         </main>
       </div>
 
@@ -1556,16 +1425,7 @@ export const ProfilePage = () => {
         </div>
       )}
 
-      {/* Assessment Modal if user wants to take/retake test directly */}
-      {isAssessmentModalOpen && (
-        <TakeAssessmentModal
-          isOpen={isAssessmentModalOpen}
-          onClose={() => setIsAssessmentModalOpen(false)}
-          onAssessmentComplete={handleAssessmentComplete}
-          currentData={assessmentSummary.scores}
-          userId={profileData?.user_id || user?.id}
-        />
-      )}
+
     </div>
   );
 };

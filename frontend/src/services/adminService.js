@@ -72,6 +72,15 @@ export const adminService = {
   },
 
   /**
+   * Delete a task and its associated configurations permanently
+   * @param {number|string} taskId
+   * @returns {Promise<Object>}
+   */
+  async deleteTask(taskId) {
+    return api.delete(`/admin/tasks/${taskId}`);
+  },
+
+  /**
    * Fetch historical assessments across all agents with predictions and scores
    * @returns {Promise<Object>}
    */

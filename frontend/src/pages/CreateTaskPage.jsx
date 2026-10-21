@@ -22,7 +22,8 @@ import {
   Plus, 
   CheckCircle2, 
   HelpCircle,
-  FileText
+  FileText,
+  Trash2
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { BrandLogo } from '../components/auth/BrandLogo';
@@ -33,28 +34,16 @@ import { adminService } from '../services/adminService';
 
 const COMPETENCY_TIERS = [
   {
-    tier: 'NEEDS_IMPROVEMENT',
-    label: 'Needs Improvement',
-    badge: 'bg-rose-50 text-rose-700 border-rose-200',
-    description: 'Foundational entry; requires active mentoring and guided workflow verification.'
-  },
-  {
-    tier: 'BASIC',
-    label: 'Basic',
-    badge: 'bg-amber-50 text-amber-700 border-amber-200',
-    description: 'Entry-level proficiency; suitable for straightforward, standard procedural tickets.'
-  },
-  {
-    tier: 'COMPETENT',
-    label: 'Competent',
+    tier: 'ELIGIBLE',
+    label: 'Verified Competent (Eligible)',
     badge: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    description: 'Autonomous execution; demonstrates solid diagnostic reasoning and independent resolution.'
+    description: 'Candidate must be classified as Eligible by the Gatekeeper Random Forest model.'
   },
   {
-    tier: 'ADVANCED',
-    label: 'Advanced',
-    badge: 'bg-blue-50 text-blue-700 border-blue-200',
-    description: 'High-stakes & escalation tier; handles complex multi-tier incidents and client advisory.'
+    tier: 'NOT_ELIGIBLE',
+    label: 'Open to All (No Competency Gate)',
+    badge: 'bg-slate-50 text-slate-700 border-slate-200',
+    description: 'No prerequisite gatekeeper competency requirement; open to all registered agents.'
   }
 ];
 
@@ -87,6 +76,8 @@ export const CreateTaskPage = () => {
   // Modals
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -105,7 +96,7 @@ export const CreateTaskPage = () => {
     positions_count: 1,
     application_deadline: '',
     expected_duration: '3 months',
-    minimum_competency: 'BASIC',
+    minimum_competency: 'ELIGIBLE',
     required_certification_id: '',
     minimum_experience_months: 0,
     exam_required: false,
@@ -150,7 +141,7 @@ export const CreateTaskPage = () => {
               positions_count: t.positions_count || 1,
               application_deadline: t.application_deadline ? t.application_deadline.split('T')[0] : '',
               expected_duration: t.expected_duration || '3 months',
-              minimum_competency: t.minimum_competency || 'BASIC',
+              minimum_competency: t.minimum_competency || 'ELIGIBLE',
               required_certification_id: t.required_certification_id ? String(t.required_certification_id) : '',
               minimum_experience_months: t.minimum_experience_months || 0,
               exam_required: Boolean(t.exam_required),
@@ -995,7 +986,7 @@ export const CreateTaskPage = () => {
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {COMPETENCY_TIERS.map(({ tier, label, badge, description }) => {
                     const isSelected = formData.minimum_competency === tier;
                     return (
@@ -1231,6 +1222,18 @@ export const CreateTaskPage = () => {
                   <Eye className="w-3.5 h-3.5 mr-1 text-slate-500" />
                   Preview
                 </Button>
+                {isEditMode && (
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={() => setIsDeleteModalOpen(true)}
+                    disabled={isSubmitting || isDeleting}
+                    className="border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 hover:border-rose-300"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 mr-1 text-rose-600" />
+                    Delete Task
+                  </Button>
+                )}
               </div>
 
               <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
@@ -1389,6 +1392,65 @@ export const CreateTaskPage = () => {
               className="bg-rose-600 hover:bg-rose-700 text-white"
             >
               Discard &amp; Exit
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ========================================================= */}
+      {/* MODAL: DELETE TASK CONFIRMATION */}
+      {/* ========================================================= */}
+      <Modal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          if (!isDeleting) setIsDeleteModalOpen(false);
+        }}
+        title="Delete Task"
+      >
+        <div className="space-y-4 text-xs sm:text-sm text-slate-700">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0 border border-rose-100">
+              <AlertCircle className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="font-semibold text-slate-900">
+                Are you sure you want to permanently delete this task?
+              </p>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                This action is permanent and cannot be undone. The task and all associated requirements, topics, and applications will be permanently removed.
+              </p>
+            </div>
+          </div>
+
+          <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setIsDeleteModalOpen(false)}
+              disabled={isDeleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={async () => {
+                if (!taskId) return;
+                setIsDeleting(true);
+                try {
+                  await adminService.deleteTask(taskId);
+                  navigate('/admin/dashboard');
+                } catch (err) {
+                  setFormError(err?.response?.data?.error || err.message || 'Failed to delete task.');
+                  setIsDeleteModalOpen(false);
+                } finally {
+                  setIsDeleting(false);
+                }
+              }}
+              isLoading={isDeleting}
+              className="bg-rose-600 hover:bg-rose-700 text-white font-medium"
+            >
+              Delete Permanently
             </Button>
           </div>
         </div>
