@@ -1,5 +1,5 @@
 import smtplib
-import random
+import secrets
 import logging
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -9,12 +9,16 @@ logger = logging.getLogger(__name__)
 
 
 def generate_otp():
-    """Generate a 6-digit OTP as a string."""
-    return str(random.randint(100000, 999999))
+    """Generate a cryptographically secure 6-digit OTP as a string using OS CSPRNG."""
+    return str(secrets.randbelow(900000) + 100000)
 
 
 def send_verification_email(recipient_email, recipient_name, code):
-    """Send a verification email with the OTP code via Gmail SMTP."""
+    """Send a verification email with the OTP code via configured SMTP server."""
+    if not Config.MAIL_SENDER_EMAIL or not Config.MAIL_SENDER_PASSWORD:
+        logger.error("SMTP sender credentials are not configured in environment.")
+        raise RuntimeError("Email service is not configured. Please contact the administrator.")
+
     try:
         msg = MIMEMultipart('alternative')
         msg['Subject'] = 'Verify your VerifyMesh account'
@@ -53,11 +57,11 @@ def send_verification_email(recipient_email, recipient_name, code):
 
         msg.attach(MIMEText(html_body, 'html'))
 
-        # Connect to Gmail SMTP on Port 587 with STARTTLS
         with smtplib.SMTP(Config.MAIL_SERVER, Config.MAIL_PORT, timeout=10) as server:
             server.ehlo()
-            server.starttls()
-            server.ehlo()  # CRITICAL: Re-establish EHLO capabilities post-TLS upgrade
+            if Config.MAIL_USE_TLS:
+                server.starttls()
+                server.ehlo()
             server.login(Config.MAIL_SENDER_EMAIL, Config.MAIL_SENDER_PASSWORD)
             server.sendmail(Config.MAIL_SENDER_EMAIL, recipient_email, msg.as_string())
 
@@ -65,5 +69,5 @@ def send_verification_email(recipient_email, recipient_name, code):
         return True
 
     except Exception as e:
-        logger.error(f"Failed to send verification email: {str(e)}")
+        logger.error(f"Failed to send verification email to {recipient_email}: {type(e).__name__}")
         raise e

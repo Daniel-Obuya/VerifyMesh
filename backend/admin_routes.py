@@ -3,6 +3,8 @@ from flask import Blueprint, request, jsonify
 from backend.auth_routes import decode_auth_token
 from backend.db import (
     normalize_role,
+    find_user_by_id,
+    get_mysql_connection,
     get_admin_overview_metrics,
     get_admin_agents,
     get_admin_tasks,
@@ -11,6 +13,7 @@ from backend.db import (
     create_task_with_requirements,
     update_task_with_requirements,
     set_task_status,
+    delete_task,
     get_admin_assessments,
     get_admin_reviews,
     get_admin_review_detail,
@@ -27,7 +30,8 @@ admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 
 def get_authenticated_admin():
     """
-    Verify the Bearer token and enforce Administrator role server-side.
+    Verify the Bearer token, check active account status, and enforce
+    the Administrator role against the live MySQL database on every request.
     Returns (user_id, role, None) on success.
     Returns (None, None, (response, http_code)) on failure.
     """
@@ -42,17 +46,34 @@ def get_authenticated_admin():
         return None, None, (
             jsonify({"success": False, "error": "Invalid or expired token."}), 401
         )
-    raw_role = payload.get("role", "")
-    canonical_role = normalize_role(raw_role)
-    if canonical_role not in ("Administrator", "ADMIN"):
-        return None, None, (
-            jsonify({"success": False, "error": "Administrator role required."}), 403
-        )
+
     user_id = payload.get("uid")
     if not user_id:
         return None, None, (
             jsonify({"success": False, "error": "Malformed token: missing user id."}), 401
         )
+
+    user, db_err = find_user_by_id(user_id)
+    if db_err:
+        return None, None, (
+            jsonify({"success": False, "error": "Database service is currently unavailable."}), 503
+        )
+    if not user:
+        return None, None, (
+            jsonify({"success": False, "error": "User account no longer exists or session is invalid."}), 401
+        )
+
+    if not user.get("is_active", True):
+        return None, None, (
+            jsonify({"success": False, "error": "Account is inactive or suspended. Please contact your administrator."}), 403
+        )
+
+    canonical_role = normalize_role(user.get("role", ""))
+    if canonical_role not in ("Administrator", "ADMIN"):
+        return None, None, (
+            jsonify({"success": False, "error": "Administrator role required."}), 403
+        )
+
     return user_id, canonical_role, None
 
 
@@ -240,6 +261,26 @@ def admin_set_task_status(task_id):
         return jsonify({"success": False, "error": str(ve)}), 400
     except Exception as e:
         logger.error(f"Error updating status for task {task_id}: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@admin_bp.route("/tasks/<int:task_id>", methods=["DELETE"])
+def admin_delete_task(task_id):
+    """Permanently delete a task and its associated configurations."""
+    user_id, _role, err = get_authenticated_admin()
+    if err:
+        return err
+
+    try:
+        delete_task(task_id, admin_user_id=user_id)
+        return jsonify({
+            "success": True,
+            "message": f"Task {task_id} deleted successfully."
+        }), 200
+    except ValueError as ve:
+        return jsonify({"success": False, "error": str(ve)}), 404
+    except Exception as e:
+        logger.error(f"Error deleting task {task_id}: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 
