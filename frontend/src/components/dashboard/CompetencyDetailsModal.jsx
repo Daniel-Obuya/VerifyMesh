@@ -10,13 +10,11 @@ export const CompetencyDetailsModal = ({
 }) => {
   if (!isOpen) return null;
 
-  const competency = prediction?.predicted_competency || 'Competent';
+  const competency = prediction?.predicted_competency || 'Eligible';
   const confidence = prediction?.confidence || 78;
   const probabilities = prediction?.probabilities || {
-    Competent: 78,
-    Advanced: 14,
-    Basic: 6,
-    'Needs Improvement': 2,
+    Eligible: 78,
+    'Not Eligible': 22,
   };
 
   return (
@@ -37,7 +35,7 @@ export const CompetencyDetailsModal = ({
                 Competency Profile &amp; Model Insights
               </h3>
               <p className="text-xs text-slate-500">
-                Google Colab Random Forest Model &bull; Verification Summary
+                Binary Gatekeeper Random Forest Model &bull; Verification Summary
               </p>
             </div>
           </div>
@@ -77,20 +75,25 @@ export const CompetencyDetailsModal = ({
               Random Forest Probability Breakdown
             </h5>
             <div className="p-4 rounded-xl bg-slate-50/70 border border-slate-200 space-y-3">
-              {Object.entries(probabilities).map(([cls, prob]) => (
-                <div key={cls} className="space-y-1">
-                  <div className="flex justify-between text-xs font-semibold">
-                    <span className="text-slate-700">{cls}</span>
-                    <span className="text-slate-900">{prob}%</span>
+              {Object.entries(probabilities).map(([cls, prob]) => {
+                const isEligibleClass = cls === 'Eligible';
+                return (
+                  <div key={cls} className="space-y-1">
+                    <div className="flex justify-between text-xs font-semibold">
+                      <span className="text-slate-700">{cls}</span>
+                      <span className="text-slate-900">{prob}%</span>
+                    </div>
+                    <div className="w-full bg-slate-200/70 h-2 rounded-full overflow-hidden">
+                      <div 
+                        className={`h-full rounded-full transition-all duration-500 ${
+                          isEligibleClass ? 'bg-emerald-600' : 'bg-slate-400'
+                        }`}
+                        style={{ width: `${Math.min(prob, 100)}%` }}
+                      />
+                    </div>
                   </div>
-                  <div className="w-full bg-slate-200/70 h-2 rounded-full overflow-hidden">
-                    <div 
-                      className="bg-[#3B50BA] h-full rounded-full transition-all duration-500"
-                      style={{ width: `${Math.min(prob, 100)}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
@@ -133,7 +136,7 @@ export const CompetencyDetailsModal = ({
               <Sparkles className="w-3.5 h-3.5 text-[#3B50BA]" />
               Model Architecture &amp; Training
             </p>
-            VerifyMesh decouples heavy model training (executed externally in Google Colab) from fast real-time inference in this dashboard. Assessment scores can be re-evaluated anytime to reflect newly acquired skills and unlock higher-paying tasks.
+            VerifyMesh employs an authoritative Binary Gatekeeper Random Forest model (150 trees, max depth 10, 74.5% test accuracy, 0.8184 ROC-AUC) to classify competency into <strong>Eligible</strong> or <strong>Not Eligible</strong>. Assessment attempts and verified profile credentials continuously inform inference.
           </div>
         </div>
 

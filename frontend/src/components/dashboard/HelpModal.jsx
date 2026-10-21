@@ -36,14 +36,14 @@ export const HelpModal = ({ isOpen, onClose }) => {
           <div className="space-y-1.5">
             <h4 className="font-bold text-slate-900 text-sm">How does Competency work?</h4>
             <p className="leading-relaxed">
-              VerifyMesh uses a Random Forest ML model trained in Google Colab to evaluate your assessment scores and industry experience into a verified competency level (Basic, Competent, Advanced).
+              VerifyMesh uses a Gatekeeper Random Forest ML model (74.5% test accuracy, 0.8184 ROC-AUC) to evaluate your assessment scores, industry experience, and verified certifications into an authoritative competency status: <strong>Eligible</strong> or <strong>Not Eligible</strong>.
             </p>
           </div>
 
           <div className="space-y-1.5">
-            <h4 className="font-bold text-slate-900 text-sm">How do I qualify for more tasks?</h4>
+            <h4 className="font-bold text-slate-900 text-sm">How do I qualify for tasks?</h4>
             <p className="leading-relaxed">
-              Click the <strong>Take Assessment</strong> button to update your test battery scores or complete the interactive quiz. Reaching the <em>Advanced</em> level unlocks premium roles like Product Consultant.
+              Complete required topic assessments with passing scores (&ge;70%) and ensure your prerequisite certifications and experience months are verified on your profile to unlock task applications.
             </p>
           </div>
 
