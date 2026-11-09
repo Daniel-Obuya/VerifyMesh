@@ -11,7 +11,6 @@ from backend.auth_routes import auth_bp
 from backend.competency_routes import competency_bp
 from backend.admin_routes import admin_bp
 from backend.db import check_mysql_status
-from src.inference import inference_engine
 
 
 def create_app(config_class=Config):
@@ -29,9 +28,8 @@ def create_app(config_class=Config):
 
     CORS(app, resources={r"/api/*": {"origins": trusted_origins}}, supports_credentials=True)
 
-    # Initialize ML model at startup
-    model_loaded = inference_engine.load_model()
-    app.logger.info(f"[VerifyMesh ML] Startup model initialization: {'SUCCESS' if model_loaded else 'PENDING'}")
+    # Deterministic eligibility engine active; binary ML gatekeeper retired
+    app.logger.info("[VerifyMesh Engine] Deterministic Eligibility Engine: ACTIVE (Binary ML Gatekeeper Retired)")
 
     # Register blueprints
     app.register_blueprint(auth_bp)
@@ -41,21 +39,30 @@ def create_app(config_class=Config):
     @app.route('/api/health', methods=['GET'])
     def health_check():
         mysql_ready = check_mysql_status()
-        model_info = inference_engine.get_info()
+        from src.task_suitability_inference import task_suitability_engine
+        model_info = task_suitability_engine.get_info()
         return jsonify({
             "status": "healthy" if mysql_ready else "degraded",
             "service": "VerifyMesh API",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "database": {
                 "engine": "MySQL",
                 "connected": mysql_ready,
                 "mode": "MySQL Database" if mysql_ready else "Unavailable"
             },
             "machine_learning": {
-                "source": "Google Colab",
-                "role": "Inference & Prediction",
-                "model_loaded": model_info.get("model_loaded", False),
-                "active_model": model_info.get("model_file")
+                "source": "VerifyMesh Phase 3/4 ML Pipeline",
+                "role": model_info.get("role", "Task-Specific Suitability Prediction"),
+                "eligibility_engine": model_info.get("eligibility_engine", "Deterministic Server-Side Rules"),
+                "active_model": model_info.get("model_file", "verifymesh_stage2_suitability_pipeline_v2.joblib"),
+                "model_name": model_info.get("model_name"),
+                "model_version": model_info.get("model_version"),
+                "model_sha256": model_info.get("model_sha256"),
+                "features_count": model_info.get("features_count", 5),
+                "decision_threshold": model_info.get("decision_threshold", 0.60),
+                "model_loaded": model_info.get("model_loaded", True),
+                "binary_gatekeeper_status": "Retired",
+                "synthetic_data_disclaimer": model_info.get("synthetic_data_disclaimer")
             }
         }), 200
 

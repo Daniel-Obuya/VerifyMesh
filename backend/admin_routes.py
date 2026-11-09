@@ -14,14 +14,18 @@ from backend.db import (
     update_task_with_requirements,
     set_task_status,
     delete_task,
+    get_task_applicants,
+    update_task_application_status,
+    assign_task_application,
     get_admin_assessments,
     get_admin_reviews,
     get_admin_review_detail,
+    update_admin_review_decision,
     get_admin_pending_verifications,
     review_agent_certification,
-    review_agent_experience
+    review_agent_experience,
+    get_agent_profile_data,
 )
-from src.inference import inference_engine
 
 logger = logging.getLogger("verifymesh.admin")
 
@@ -69,9 +73,9 @@ def get_authenticated_admin():
         )
 
     canonical_role = normalize_role(user.get("role", ""))
-    if canonical_role not in ("Administrator", "ADMIN"):
+    if canonical_role not in ("Administrator", "ADMIN", "Workforce Officer", "WORKFORCE_OFFICER"):
         return None, None, (
-            jsonify({"success": False, "error": "Administrator role required."}), 403
+            jsonify({"success": False, "error": "Workforce Officer or Administrator role required."}), 403
         )
 
     return user_id, canonical_role, None
@@ -93,14 +97,29 @@ def admin_overview():
         if metrics is None:
             return jsonify({"success": False, "error": "Failed to load overview metrics"}), 500
 
-        # Inject runtime inference engine info
-        engine_info = inference_engine.get_info()
+        # Runtime model metadata: Deterministic Eligibility is active; task suitability model configured
+        from src.task_suitability_inference import task_suitability_engine
+        model_info = task_suitability_engine.get_info()
         metrics["runtime_model"] = {
-            "model_file": engine_info.get("model_file"),
-            "model_path": engine_info.get("model_path"),
-            "model_loaded": engine_info.get("model_loaded"),
-            "classes": engine_info.get("classes", []),
-            "feature_count": engine_info.get("feature_count", 11)
+            "model_file": model_info.get("model_file", "verifymesh_stage2_suitability_pipeline_v2.joblib"),
+            "model_name": model_info.get("model_name", "VerifyMesh_Stage2_Suitability_LR_v2"),
+            "model_version": model_info.get("model_version", "2.0.0"),
+            "model_path": model_info.get("model_path"),
+            "model_sha256": model_info.get("model_sha256"),
+            "model_loaded": model_info.get("model_loaded", True),
+            "classes": model_info.get("classes", ["Not Suitable (0)", "Suitable (1)"]),
+            "feature_count": model_info.get("features_count", 5),
+            "features_count": model_info.get("features_count", 5),
+            "expected_features": model_info.get("expected_features", []),
+            "feature_descriptions": model_info.get("feature_descriptions", {}),
+            "is_binary_gatekeeper": False,
+            "eligibility_engine": "Deterministic Server-Side Rules",
+            "decision_threshold": model_info.get("decision_threshold", 0.60),
+            "moderate_threshold": model_info.get("moderate_threshold", 0.48),
+            "advisory_tiers": model_info.get("advisory_tiers", {}),
+            "is_advisory": True,
+            "training_scenario": model_info.get("training_scenario"),
+            "synthetic_data_disclaimer": model_info.get("synthetic_data_disclaimer")
         }
 
         return jsonify({
@@ -132,6 +151,34 @@ def admin_agents():
         }), 200
     except Exception as e:
         logger.error(f"Error in admin agents: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@admin_bp.route("/agents/<int:agent_id>/profile", methods=["GET"])
+def admin_agent_profile(agent_id):
+    """Fetch comprehensive profile data for an agent (contact, exp, certs, assessments)."""
+    user_id, _role, err = get_authenticated_admin()
+    if err:
+        return err
+
+    try:
+        conn = get_mysql_connection()
+        if not conn:
+            return jsonify({"success": False, "error": "Database unavailable"}), 503
+        with conn.cursor() as cur:
+            cur.execute("SELECT user_id FROM agents WHERE agent_id = %s LIMIT 1", (agent_id,))
+            row = cur.fetchone()
+            if not row:
+                return jsonify({"success": False, "error": "Agent not found"}), 404
+            agent_user_id = row["user_id"] if isinstance(row, dict) else row[0]
+
+        profile = get_agent_profile_data(agent_user_id)
+        if not profile:
+            return jsonify({"success": False, "error": "Agent profile not found"}), 404
+
+        return jsonify({"success": True, "data": profile}), 200
+    except Exception as e:
+        logger.error(f"Error fetching agent profile for agent {agent_id}: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -284,6 +331,76 @@ def admin_delete_task(task_id):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@admin_bp.route("/tasks/<int:task_id>/applications", methods=["GET"])
+def admin_get_task_applications(task_id):
+    """Retrieve all applicants for a given task with requirement fulfillment details."""
+    user_id, _role, err = get_authenticated_admin()
+    if err:
+        return err
+
+    try:
+        applicants = get_task_applicants(task_id)
+        return jsonify({
+            "success": True,
+            "data": applicants,
+            "count": len(applicants)
+        }), 200
+    except Exception as e:
+        logger.error(f"Error fetching applicants for task {task_id}: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@admin_bp.route("/applications/<int:application_id>/assign", methods=["POST"])
+def admin_assign_task_application(application_id):
+    """
+    Assign a task application to an applicant.
+    Authoritatively validates eligibility prerequisites before updating.
+    """
+    user_id, _role, err = get_authenticated_admin()
+    if err:
+        return err
+
+    try:
+        res = assign_task_application(application_id, admin_user_id=user_id)
+        return jsonify({
+            "success": True,
+            "message": "Task successfully assigned to applicant.",
+            "data": res
+        }), 200
+    except ValueError as ve:
+        return jsonify({"success": False, "error": str(ve)}), 400
+    except Exception as e:
+        logger.error(f"Error assigning task application {application_id}: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@admin_bp.route("/applications/<int:application_id>/status", methods=["POST"])
+def admin_update_application_status(application_id):
+    """Update status of an application (e.g., Shortlisted, Under Review, Rejected)."""
+    user_id, _role, err = get_authenticated_admin()
+    if err:
+        return err
+
+    data = request.get_json(silent=True) or {}
+    status = data.get("status")
+    notes = data.get("notes")
+    if not status:
+        return jsonify({"success": False, "error": "Status is required."}), 400
+
+    try:
+        res = update_task_application_status(application_id, status, notes=notes, admin_user_id=user_id)
+        return jsonify({
+            "success": True,
+            "message": f"Application status updated to {status}.",
+            "data": res
+        }), 200
+    except ValueError as ve:
+        return jsonify({"success": False, "error": str(ve)}), 400
+    except Exception as e:
+        logger.error(f"Error updating application {application_id} status: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 # =====================================================================
 # ASSESSMENT AUDIT HISTORY
 # =====================================================================
@@ -349,6 +466,27 @@ def admin_review_detail(evaluation_id):
     except Exception as e:
         logger.error(f"Error in admin review detail: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@admin_bp.route("/reviews/<int:evaluation_id>/review", methods=["POST"])
+def admin_submit_review(evaluation_id):
+    """Record officer review decision on an eligibility evaluation."""
+    user_id, _role, err = get_authenticated_admin()
+    if err:
+        return err
+
+    payload = request.get_json(silent=True) or {}
+    decision = payload.get("decision", "").upper()
+    comments = payload.get("comments", "").strip()
+
+    if decision not in ["APPROVED", "REJECTED"]:
+        return jsonify({"success": False, "error": "Decision must be APPROVED or REJECTED."}), 400
+
+    success, msg = update_admin_review_decision(evaluation_id, decision, user_id, comments)
+    if not success:
+        return jsonify({"success": False, "error": msg}), 500
+
+    return jsonify({"success": True, "message": msg}), 200
 
 
 # =====================================================================
