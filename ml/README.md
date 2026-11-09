@@ -1,22 +1,19 @@
-# VerifyMesh Machine Learning Pipeline
+# VerifyMesh — Machine Learning Experiments, Models & Metadata (`ml/`)
 
-This directory contains the authoritative machine learning code, training notebook, evaluation tools, and reproducibility documentation for the **VerifyMesh Workforce Competency Gatekeeper**.
+This directory contains the synthetic datasets, experimental benchmarks (Phases 0–3), reproducible Jupyter notebook, serialized machine learning pipelines, and model metadata for **VerifyMesh Stage 2 (Task-Specific Suitability Prediction)**.
 
 ---
 
-## 1. Machine Learning Overview
+## 1. Two-Stage VerifyMesh Decision Architecture
 
-VerifyMesh utilizes a **Binary Random Forest Classifier** to evaluate candidate readiness for task dispatch. The model functions as a statistical gatekeeper, predicting whether an agent is **`Eligible`** or **`Not Eligible`** based on verified domain experience, certifications, and core assessment test scores.
+VerifyMesh strictly separates deterministic eligibility verification from advisory machine learning ranking:
 
-| Parameter | Specification |
-| :--- | :--- |
-| **Model Type** | Scikit-Learn `Pipeline` (`StandardScaler` + `RandomForestClassifier`) |
-| **Number of Estimators** | 150 trees |
-| **Max Depth** | 10 levels |
-| **Min Samples Split** | 5 |
-| **Random State** | `42` (Fixed for full reproducibility) |
-| **Decision Boundary** | $\tau = 0.50$ ($P(\text{Eligible}) \ge 0.50 \implies \text{Eligible}$) |
-| **Active Artifact** | [`backend/models/binary_eligibility_model.pkl`](file:///c:/Users/DANIEL/Desktop/Verify_Mesh/backend/models/binary_eligibility_model.pkl) (3.45 MB) |
+1. **Stage 1 — Deterministic Eligibility Gatekeeper (Authoritative):**
+   - Evaluates mandatory task requirements: required certification (`cert_satisfied == 1`), minimum relevant experience (`experience_surplus_months >= 0`), overall assessment threshold (`assessment_gap >= 0`), communication/product competency floors (`communication_gap >= -5.0`, `product_knowledge_gap >= -5.0`), and domain-specific skill floors (`sales_skill_gap >= -3.0` for *Enterprise Sales*; `customer_service_gap >= -3.0` for *Customer Support Escalations*).
+   - Candidates who fail Stage 1 (`is_eligible == 0`) are **never** passed to Stage 2, ranked as eligible, or overridden by ML predictions.
+2. **Stage 2 — Task-Specific Suitability Prediction (Advisory):**
+   - Scores **only** Stage 1-eligible candidate–task pairs (`is_eligible == 1`).
+   - Predicts the calibrated probability $P(\text{task\_success} = 1 \mid \mathbf{x})$ of simulated task execution success and assigns an advisory tier (`Strong Fit` $\ge 0.60$, `Moderate Fit` $[0.48, 0.60)$, `Needs Review` $< 0.48$) alongside transparent factor-level explanations to support human administrators.
 
 ---
 
@@ -24,89 +21,112 @@ VerifyMesh utilizes a **Binary Random Forest Classifier** to evaluate candidate 
 
 ```text
 ml/
+├── README.md                                                     # This documentation file
 ├── notebooks/
-│   └── Verify_Mesh.ipynb    # Google Colab / Jupyter interactive research notebook
-├── train.py                 # Standalone training script (trains, cross-validates, and saves artifact)
-├── evaluate.py              # Standalone evaluation & threshold sensitivity audit script
-└── README.md                # ML architecture & reproducibility guide (this file)
+│   ├── VerifyMesh_Task_Suitability_Experiment.ipynb              # Reconstructed & executed Phases 0–3 notebook
+│   └── VerifyMesh_Task_Suitability_Experiment_legacy_colab_backup.ipynb  # Backup of original Colab notebook
+├── models/
+│   ├── verifymesh_stage2_suitability_pipeline_v2.joblib          # Final Phase 3 Stage 2 LR pipeline
+│   └── verifymesh_final_optimized_pipeline.joblib                # Preserved legacy 28-feature RF pipeline
+├── metadata/
+│   ├── verifymesh_stage2_metadata_v2.json                        # Final Phase 3 Stage 2 metadata & schema
+│   └── verifymesh_threshold_metadata.json                        # Preserved legacy threshold metadata (0.61)
+└── experiments/
+    ├── task_specific_synthetic_data/                             # Scenario A (Original Balanced Compensatory)
+    │   ├── generate_synthetic_dataset.py                         # Synthetic dataset generator (Scenario A & B)
+    │   ├── synthetic_applicants.csv                              # 800 applicants
+    │   ├── synthetic_tasks.csv                                   # 30 tasks across 5 categories
+    │   ├── synthetic_applicant_task_pairs.csv                    # 6,000 evaluated pairs (42 columns)
+    │   ├── task_suitability_training.csv                         # 1,183 Stage 1-eligible pairs (35 columns)
+    │   ├── data_dictionary.md                                    # Column definitions
+    │   ├── simulation_methodology.md                             # Mathematical specification of generator
+    │   └── dataset_validation_report.md                          # Initial dataset validation report
+    └── stage2_refinement/                                        # Phases 1–3 Controlled Refinement Benchmarks
+        ├── scenario_b_data/                                      # Scenario B (Strict Bottleneck / Weakest-Link)
+        │   ├── synthetic_applicants.csv                          # 3,200 applicants
+        │   ├── synthetic_tasks.csv                               # 30 tasks across 5 categories
+        │   ├── synthetic_applicant_task_pairs.csv                # 24,000 evaluated pairs (42 columns)
+        │   └── task_suitability_training.csv                     # 4,675 Stage 1-eligible pairs (35 columns)
+        ├── run_phase1_benchmark.py                               # Phase 1: Applicant-grouped CV model benchmark
+        ├── phase1_benchmark_summary.csv                          # Phase 1 aggregated 25-fold metrics
+        ├── phase1_fold_details.csv                               # Phase 1 per-fold metrics
+        ├── phase1_benchmark_results.json                         # Phase 1 full diagnostic results
+        ├── phase1_benchmark_report.md                            # Phase 1 technical report
+        ├── run_phase2_scenario_comparison.py                     # Phase 2: Scenario A vs. Scenario B comparison
+        ├── phase2_scenario_comparison_summary.csv                # Phase 2 aggregated 25-fold metrics
+        ├── phase2_scenario_comparison_folds.csv                  # Phase 2 per-fold metrics
+        ├── phase2_scenario_comparison_results.json               # Phase 2 full diagnostic results
+        ├── phase2_scenario_comparison_report.md                  # Phase 2 technical report
+        ├── run_phase3_calibration_and_serialization.py           # Phase 3: Calibration audit & serialization
+        ├── phase3_calibration_comparison.csv                     # Phase 3 calibration variant metrics
+        ├── phase3_threshold_analysis.csv                         # Phase 3 threshold sweep & inner-CV diagnostics
+        ├── phase3_final_model_results.json                       # Phase 3 full evaluation & parameters
+        ├── phase3_final_model_report.md                          # Phase 3 technical report
+        ├── run_phase3_final_audit.py                             # Phase 3 Final Audit: 5 vs. 6 features & parity
+        ├── phase3_final_audit_5v6_summary.csv                    # 5-feature vs. 6-feature comparison table
+        ├── phase3_final_audit_results.json                       # Phase 3 Final Audit JSON
+        └── phase3_final_audit_report.md                          # Phase 3 Final Audit Markdown report
 ```
+
+Shared feature engineering and inference utilities live in the repository's `src/` package:
+- `src/stage2_feature_engineering.py`: Shared training and inference feature computation (`compute_stage2_features_dataframe`, `build_complete_stage2_feature_dict`, `explain_stage2_prediction`).
+- `src/task_suitability_inference.py`: Stage 2 model loading and inference service.
 
 ---
 
-## 3. Feature Contract & Engineering Specification
+## 3. Final Selected Stage 2 Model Summary (`VerifyMesh_Stage2_Suitability_LR_v2`)
 
-The model expects exactly **15 numerical features** in the precise order specified below:
-
-| Index | Feature Name | Source / Derivation Formula |
-| :---: | :--- | :--- |
-| 0 | `previous_experience_months` | Raw: Candidate's verified prior domain tenure (months) |
-| 1 | `sales_experience_months` | Raw: Specific sales experience tenure (months) |
-| 2 | `customer_service_experience_months` | Raw: Specific customer service tenure (months) |
-| 3 | `certification_count` | Raw: Total number of verified certifications (0 - 5) |
-| 4 | `relevant_certification` | Raw: Flag (`1` or `0`) indicating domain-specific certification |
-| 5 | `assessment_score` | Raw: Overall core assessment battery score (0 - 100) |
-| 6 | `communication_score` | Raw: Communication competency exam score (0 - 100) |
-| 7 | `product_knowledge_score` | Raw: Technical product exam score (0 - 100) |
-| 8 | `sales_skill_score` | Raw: Sales negotiation exam score (0 - 100) |
-| 9 | `customer_service_score` | Raw: Customer support exam score (0 - 100) |
-| 10 | `certified_leverage` | Engineered: $\text{certification\_count} \times (1 + \text{relevant\_certification})$ |
-| 11 | `total_experience_months` | Engineered: $\sum(\text{previous} + \text{sales} + \text{customer\_service})$ |
-| 12 | `mean_score` | Engineered: $\text{mean}(\text{all 5 exam scores})$ |
-| 13 | `min_score` | Engineered: $\text{min}(\text{all 5 exam scores})$ |
-| 14 | `max_score` | Engineered: $\text{max}(\text{all 5 exam scores})$ |
-
----
-
-## 4. How to Reproduce the ML Workflow
-
-Ensure your virtual environment is active before running commands:
-```powershell
-# Windows PowerShell
-.venv\Scripts\Activate.ps1
-```
-
-### Option A: Evaluate the Pre-Trained Model (No Re-Training Required)
-To evaluate the active model artifact on the 400-sample stratified holdout test set without modifying anything:
-
-```powershell
-python ml/evaluate.py
-```
-
-Expected Output:
-- Model Loading Confirmation
-- Hold-out Accuracy, ROC-AUC, and Confusion Matrix
-- Precision and Recall across classes (`Eligible` vs `Not Eligible`)
-- Decision Threshold Sensitivity Table ($\tau \in [0.40, 0.60]$)
+- **Algorithm:** Uncalibrated L2-regularized Logistic Regression (`StandardScaler` + `LogisticRegression(C=0.5, penalty='l2', solver='lbfgs', max_iter=1000, random_state=42)`).
+- **Training Dataset:** Scenario B (`ml/experiments/stage2_refinement/scenario_b_data/task_suitability_training.csv`, $N = 4,675$ Stage 1-eligible pairs across $1,924$ unique applicants and $30$ tasks).
+- **Engineered Features:**
+  1. `weighted_skill_margin`: Category-weighted competency surplus across communication, product knowledge, sales, and customer support.
+  2. `min_skill_margin`: Minimum individual competency margin across all 5 skill dimensions.
+  3. `weakest_link_deficit`: $\min(0.0, \text{min\_skill\_margin})$ (isolates sub-threshold competency deficits).
+  4. `exp_surplus_tanh`: $\tanh(\text{experience\_surplus\_months} / 12.0)$ (diminishing returns on excess experience).
+  5. `difficulty_tier`: Ordinal task difficulty ($1.0=$ Low, $2.0=$ Medium, $3.0=$ High).
+  - *Note on 6th Feature (`cert_satisfied`):* The pre-update `.joblib` artifact currently on disk (`SHA-256: 70dc562e...`) includes `cert_satisfied` as a 6th column. Because Stage 1 enforces `cert_satisfied == 1.0` for 100% of eligible pairs, its standardized weight is `0.000000`, making the 6-feature artifact and 5-feature `LR_5Feat_NoCert` pipeline mathematically identical (`max_abs_diff <= 4.44e-16`).
+- **Held-Out Applicant-Grouped Cross-Validation Performance (`5 Seeds × 5 Folds = 25 Outer Folds` on Scenario B):**
+  - **ROC-AUC:** `0.6772 ± 0.0203` (`91.2%` of the `0.7427` noiseless Oracle ceiling)
+  - **Brier Score:** `0.2110 ± 0.0042`
+  - **Log-Loss:** `0.6110 ± 0.0098`
+  - **10-Bin ECE:** `0.0298 ± 0.0117`
+  - **Operational Advisory Threshold ($\tau = 0.60$, selected via inner-fold CV with `Positive Precision >= 0.68`):**
+    - **Accuracy:** `65.54% ± 1.29%` (`67.23% ± 1.07%` at $\tau = 0.50$)
+    - **Balanced Accuracy:** `62.79% ± 1.38%`
+    - **Positive Precision / Recall / F1:** `71.96%` / `73.71%` / `0.7280`
+    - **Failure Recall (Class 0):** `51.87% ± 2.83%`
+    - **Macro F1:** `0.6287 ± 0.0138`
 
 ---
 
-### Option B: Retrain the Model from Scratch
-To re-run the complete training pipeline (including 5-fold cross-validation and holdout evaluation):
+## 4. Reproducing the Notebook and Experiments
 
-```powershell
-# Run training and overwrite active model artifact
-python ml/train.py
+### Dependencies
 
-# Or test training without modifying the saved model artifact:
-python ml/train.py --no-save
+Install the required Python packages (tested with Python `3.13.7` and `scikit-learn 1.8.0`):
+
+```bash
+pip install numpy pandas scikit-learn joblib matplotlib seaborn jupyter
 ```
 
----
+### Running the Experiment Notebook
 
-### Option C: Interactive Exploration in Jupyter or Google Colab
-The original training notebook is preserved in:
-[`ml/notebooks/Verify_Mesh.ipynb`](file:///c:/Users/DANIEL/Desktop/Verify_Mesh/ml/notebooks/Verify_Mesh.ipynb)
+From the repository root (`Verify_Mesh/`):
 
-To run locally with Jupyter:
-```powershell
-pip install jupyter
-jupyter notebook ml/notebooks/Verify_Mesh.ipynb
+```bash
+jupyter notebook ml/notebooks/VerifyMesh_Task_Suitability_Experiment.ipynb
 ```
-Or upload the notebook to [Google Colab](https://colab.research.google.com/) and load the dataset from `data/raw/VerifyMesh_Competency_Dataset_V2.csv`.
 
----
+All paths inside `VerifyMesh_Task_Suitability_Experiment.ipynb` resolve dynamically relative to the repository root, so the notebook runs cleanly whether launched from `Verify_Mesh/` or `Verify_Mesh/ml/notebooks/`.
 
-## 5. Architectural Decoupling Invariant
+### Running the Phase 1–3 Benchmark Scripts Directly
 
-> [!IMPORTANT]
-> The ML model's prediction (`Eligible` or `Not Eligible`) functions strictly as a **gatekeeper recommendation**. In VerifyMesh, task eligibility is decoupled: an agent predicted as `Eligible` must still independently satisfy deterministic task-specific rules (mandatory certifications, minimum experience months, and passing topic-specific exams) before they are permitted to apply for a task.
+From the repository root (`Verify_Mesh/`):
+
+```bash
+python ml/experiments/stage2_refinement/run_phase1_benchmark.py
+python ml/experiments/stage2_refinement/run_phase2_scenario_comparison.py
+python ml/experiments/stage2_refinement/run_phase3_calibration_and_serialization.py
+python ml/experiments/stage2_refinement/run_phase3_final_audit.py
+```
+
