@@ -1,0 +1,628 @@
+:root {
+  --vm-bg: #0a0e1c;
+  --vm-panel: #10162b;
+  --vm-line: #222a48;
+  --vm-accent: #6f7dff;
+  --vm-accent-2: #2dd4bf;
+  --vm-text: #e8ebf7;
+  --vm-muted: #8d97b8;
+}
+
+.verifymesh-auth-page,
+.verifymesh-login-page {
+  font-family: 'Inter', system-ui, sans-serif;
+  background-color: var(--vm-bg);
+  color: var(--vm-text);
+  min-height: 100vh;
+  width: 100%;
+  overflow-x: hidden;
+}
+
+.verifymesh-auth-page h1,
+.verifymesh-auth-page h2,
+.verifymesh-auth-page .brand,
+.verifymesh-login-page h1,
+.verifymesh-login-page h2,
+.verifymesh-login-page .brand {
+  font-family: 'Sora', 'Inter', sans-serif;
+  letter-spacing: -0.02em;
+}
+
+/* -------------------------------------------------------------
+   Core Responsive Split Layout (Self-Contained & Independent)
+------------------------------------------------------------- */
+.verifymesh-auth-page .auth-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* Side-by-side layout for all laptop, desktop, and tablet screens (>= 768px) */
+@media (min-width: 768px) {
+  .verifymesh-auth-page .auth-container {
+    flex-direction: row;
+    min-height: 100vh;
+    width: 100%;
+  }
+  .verifymesh-auth-page .hero {
+    display: flex !important;
+    flex: 0 0 52%;
+    width: 52%;
+    max-width: 52%;
+    min-height: 100vh;
+    position: relative;
+  }
+  .verifymesh-auth-page .auth-main-panel {
+    display: flex !important;
+    flex: 0 0 48%;
+    width: 48%;
+    max-width: 48%;
+    min-height: 100vh;
+    overflow-y: auto;
+  }
+}
+
+@media (min-width: 1200px) {
+  .verifymesh-auth-page .hero {
+    flex: 0 0 55%;
+    width: 55%;
+    max-width: 55%;
+  }
+  .verifymesh-auth-page .auth-main-panel {
+    flex: 0 0 45%;
+    width: 45%;
+    max-width: 45%;
+  }
+}
+
+/* On narrow mobile devices (< 768px), show the form full width */
+@media (max-width: 767.98px) {
+  .verifymesh-auth-page .hero {
+    display: none !important;
+  }
+  .verifymesh-auth-page .auth-main-panel {
+    display: flex !important;
+    width: 100%;
+    min-height: 100vh;
+    padding: 2rem 1rem;
+  }
+}
+
+/* -------------------------------------------------------------
+   Hero Branding Section & Ambient Dot Background
+------------------------------------------------------------- */
+.hero-bg-dots {
+  position: relative;
+  background:
+    radial-gradient(60% 50% at 20% 10%, rgba(111,125,255,.22), transparent 70%),
+    radial-gradient(50% 40% at 85% 90%, rgba(45,212,191,.14), transparent 70%),
+    var(--vm-bg);
+}
+
+.hero-bg-dots::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(141,151,184,.18) 1px, transparent 1px);
+  background-size: 26px 26px;
+  mask-image: linear-gradient(180deg, transparent, #000 30%, #000 70%, transparent);
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 30%, #000 70%, transparent);
+  pointer-events: none;
+}
+
+.hero-bg-dots > * {
+  position: relative;
+}
+
+.verifymesh-auth-page .logo {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #4b5bd8, #6f7dff);
+  box-shadow: 0 8px 24px rgba(111,125,255,.4);
+  font-size: 1.2rem;
+  color: #fff;
+  animation: vm-glow 3.5s ease-in-out infinite;
+}
+
+.verifymesh-auth-page .hero h1 {
+  font-size: clamp(2rem, 3.2vw, 2.85rem);
+  line-height: 1.15;
+  font-weight: 700;
+  max-width: 12em;
+}
+
+.verifymesh-auth-page .lead-muted {
+  color: var(--vm-muted);
+  max-width: 32em;
+  line-height: 1.6;
+}
+
+.verifymesh-auth-page .art {
+  width: 100%;
+  max-width: 400px;
+  max-height: 250px;
+  display: block;
+  margin-top: 1rem;
+}
+
+/* -------------------------------------------------------------
+   Auth Cards & Containers
+------------------------------------------------------------- */
+.verifymesh-auth-page .auth-card {
+  width: 100%;
+  max-width: 440px;
+  padding: 2.25rem;
+  border-radius: 1.25rem;
+  background: linear-gradient(180deg, rgba(23,30,56,.85), rgba(16,22,43,.9));
+  border: 1px solid var(--vm-line);
+  box-shadow: 0 30px 60px -20px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.04);
+  position: relative;
+  opacity: 1;
+}
+
+.verifymesh-auth-page .register-card {
+  max-width: 520px;
+  padding: 1.85rem 2rem;
+}
+
+/* Form Controls & Floating Labels (Standalone fallback) */
+.verifymesh-auth-page .form-floating {
+  position: relative;
+}
+
+.verifymesh-auth-page .form-floating > .form-control {
+  background: #0c1224;
+  border: 1px solid var(--vm-line);
+  color: var(--vm-text);
+  border-radius: .75rem;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 1.625rem 0.75rem 0.625rem;
+  height: calc(3.5rem + 2px);
+  line-height: 1.25;
+  transition: border-color .2s, box-shadow .2s, transform .2s;
+}
+
+.verifymesh-auth-page .form-floating > label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  height: 100%;
+  padding: 1rem 0.75rem;
+  overflow: hidden;
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+  border: 1px solid transparent;
+  transform-origin: 0 0;
+  transition: opacity .1s ease-in-out, transform .1s ease-in-out;
+  color: var(--vm-muted);
+  font-size: 0.875rem;
+}
+
+.verifymesh-auth-page .form-control:focus {
+  border-color: var(--vm-accent);
+  box-shadow: 0 0 0 .25rem rgba(111,125,255,.2);
+  background: #0c1224;
+  color: var(--vm-text);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.verifymesh-auth-page .form-floating > .form-control:focus ~ label,
+.verifymesh-auth-page .form-floating > .form-control:not(:placeholder-shown) ~ label {
+  opacity: .75;
+  transform: scale(.85) translateY(-0.75rem) translateX(0.15rem);
+  color: var(--vm-muted);
+}
+
+.verifymesh-auth-page .form-control.is-invalid {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 .25rem rgba(239,68,68,.15);
+}
+
+.verifymesh-auth-page .invalid-feedback {
+  color: #f87171;
+  font-size: 0.8rem;
+  margin-top: 0.35rem;
+  display: block;
+}
+
+.verifymesh-auth-page .pw-wrap {
+  position: relative;
+}
+
+.verifymesh-auth-page .pw-toggle {
+  position: absolute;
+  right: .5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 0;
+  background: none;
+  color: var(--vm-muted);
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: .6rem;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color .2s, background-color .2s;
+}
+
+.verifymesh-auth-page .pw-toggle:hover {
+  color: var(--vm-text);
+  background: rgba(255,255,255,.05);
+}
+
+/* Password Strength Indicator */
+.strength-meter {
+  height: 4px;
+  background-color: var(--vm-line);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 6px;
+  margin-bottom: 4px;
+}
+
+.strength-meter-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width .3s ease, background-color .3s ease;
+}
+
+.strength-meter-fill.weak {
+  width: 33%;
+  background-color: #ef4444;
+}
+
+.strength-meter-fill.fair {
+  width: 66%;
+  background-color: #f59e0b;
+}
+
+.strength-meter-fill.strong {
+  width: 100%;
+  background-color: #10b981;
+}
+
+/* OTP 6-Digit Boxes */
+.otp-digit-input {
+  width: 48px;
+  height: 56px;
+  text-align: center;
+  font-size: 1.5rem;
+  font-weight: 700;
+  border-radius: 0.75rem;
+  background-color: #0c1224;
+  border: 1.5px solid var(--vm-line);
+  color: var(--vm-text);
+  transition: all .2s ease;
+}
+
+.otp-digit-input:focus {
+  border-color: var(--vm-accent);
+  box-shadow: 0 0 0 0.25rem rgba(111, 125, 255, 0.25);
+  background-color: #10162b;
+  outline: none;
+  transform: translateY(-2px);
+}
+
+.otp-digit-input.filled {
+  border-color: var(--vm-accent);
+  color: var(--vm-accent-2);
+}
+
+/* Alerts */
+.verifymesh-auth-page .alert {
+  border-radius: 0.75rem;
+  border-width: 1px;
+  font-size: 0.875rem;
+}
+
+.verifymesh-auth-page .alert-danger {
+  background-color: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+}
+
+.verifymesh-auth-page .alert-success {
+  background-color: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.35);
+  color: #6ee7b7;
+}
+
+.verifymesh-auth-page .form-check-input {
+  background-color: #0c1224;
+  border-color: #3a4468;
+}
+
+.verifymesh-auth-page .form-check-input:checked {
+  background-color: var(--vm-accent);
+  border-color: var(--vm-accent);
+}
+
+.verifymesh-auth-page a,
+.verifymesh-auth-page .link-accent {
+  color: #9aa5ff;
+  text-decoration: none;
+  transition: color .15s ease;
+}
+
+.verifymesh-auth-page a:hover,
+.verifymesh-auth-page .link-accent:hover {
+  color: #c0c7ff;
+  text-decoration: underline;
+}
+
+.verifymesh-auth-page .btn-primary {
+  background-color: #5a69f0;
+  border-color: #5a69f0;
+  border-radius: .75rem;
+  padding: .85rem 1rem;
+  font-weight: 600;
+  color: #fff;
+  border: 1px solid #5a69f0;
+  box-shadow: 0 10px 24px -8px rgba(111,125,255,.65);
+  transition: transform .2s ease, box-shadow .2s ease, background-color .2s;
+  cursor: pointer;
+}
+
+.verifymesh-auth-page .btn-primary:hover {
+  background-color: #6f7dff;
+  border-color: #6f7dff;
+  transform: translateY(-2px);
+}
+
+.verifymesh-auth-page .btn-primary:active {
+  background-color: #4b5bd8;
+  border-color: #4b5bd8;
+  transform: translateY(0);
+}
+
+.verifymesh-auth-page .btn-google {
+  background: #0c1224;
+  border: 1px solid var(--vm-line);
+  border-radius: .75rem;
+  padding: .8rem 1rem;
+  color: var(--vm-text);
+  font-weight: 500;
+  transition: transform .2s ease, box-shadow .2s ease, background-color .2s, border-color .2s;
+  cursor: pointer;
+}
+
+.verifymesh-auth-page .btn-google:hover {
+  background: #141b34;
+  border-color: #323c63;
+  color: #fff;
+  transform: translateY(-2px);
+}
+
+.verifymesh-auth-page .divider {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  color: var(--vm-muted);
+  font-size: .82rem;
+  text-transform: uppercase;
+}
+
+.verifymesh-auth-page .divider::before,
+.verifymesh-auth-page .divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--vm-line);
+}
+
+.verifymesh-auth-page .foot {
+  color: var(--vm-muted);
+  font-size: .8rem;
+}
+
+/* ---------- Keyframes ---------- */
+@keyframes vm-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes vm-cardIn {
+  from {
+    opacity: 0;
+    transform: translateY(22px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes vm-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes vm-pop {
+  0% { transform: scale(0); opacity: 0; }
+  60% { transform: scale(1.4); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes vm-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+@keyframes vm-ping {
+  0% { transform: scale(1); opacity: 0.8; }
+  100% { transform: scale(3.5); opacity: 0; }
+}
+
+@keyframes vm-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes vm-drift1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(60px, 45px) scale(1.15); }
+}
+
+@keyframes vm-drift2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-70px, -40px) scale(1.18); }
+}
+
+@keyframes vm-glow {
+  0%, 100% {
+    box-shadow: 0 8px 24px rgba(90, 105, 240, 0.35);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 10px 32px rgba(111, 125, 255, 0.7), 0 0 18px rgba(45, 212, 191, 0.35);
+    transform: scale(1.025);
+  }
+}
+
+@keyframes vm-shine {
+  to { transform: translateX(280%) skewX(-20deg); }
+}
+
+@keyframes vm-borderflow {
+  to { background-position: 250% 0; }
+}
+
+.verifymesh-auth-page .rise {
+  opacity: 0;
+  animation: vm-rise 0.75s cubic-bezier(0.16, 1, 0.3, 1) var(--d, 0s) forwards;
+}
+
+.verifymesh-auth-page .card-in {
+  opacity: 0;
+  animation: vm-cardIn 0.85s cubic-bezier(0.16, 1, 0.3, 1) 0.12s forwards;
+  position: relative;
+  box-shadow: 0 0 0 1px rgba(111, 125, 255, 0.18), 0 25px 60px -15px rgba(0, 0, 0, 0.75);
+}
+
+.verifymesh-auth-page .logo-glow {
+  animation: vm-glow 3.5s ease-in-out infinite;
+}
+
+.verifymesh-auth-page .art .draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: vm-draw var(--t, 1s) cubic-bezier(0.5, 0, 0.2, 1) var(--d, 0s) forwards;
+}
+
+.verifymesh-auth-page .art .pop {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scale(0);
+  opacity: 0;
+  animation: vm-pop 0.5s cubic-bezier(0.16, 1, 0.3, 1) var(--d, 0s) forwards;
+}
+
+.verifymesh-auth-page .art .sphere {
+  animation: vm-float 6s ease-in-out 2.8s infinite;
+  transition: transform 0.2s ease-out;
+}
+
+.verifymesh-auth-page .art .spin {
+  animation: vm-spin 16s linear 2.6s infinite;
+  transform-box: fill-box;
+}
+
+.verifymesh-auth-page .art .pulse {
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: vm-ping 2.6s ease-out var(--d, 2.6s) infinite;
+}
+
+.verifymesh-auth-page .blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(75px);
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+.verifymesh-auth-page .b1 {
+  width: 440px;
+  height: 440px;
+  left: -120px;
+  top: -100px;
+  background: #4b5bd8;
+  animation: vm-drift1 16s ease-in-out infinite;
+}
+
+.verifymesh-auth-page .b2 {
+  width: 380px;
+  height: 380px;
+  right: -80px;
+  bottom: -80px;
+  background: #14a394;
+  opacity: 0.3;
+  animation: vm-drift2 20s ease-in-out infinite;
+}
+
+.verifymesh-auth-page .btn-shine {
+  position: relative;
+  overflow: hidden;
+}
+
+.verifymesh-auth-page .btn-shine::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -70%;
+  width: 45%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+  transform: skewX(-20deg);
+  pointer-events: none;
+}
+
+.verifymesh-auth-page .btn-shine:hover::after {
+  animation: vm-shine 0.85s ease;
+}
+
+.verifymesh-auth-page .btn-shine:hover::after {
+  animation: vm-shine .9s ease;
+}
+
+/* Reduced motion accessibility */
+@media (prefers-reduced-motion: reduce) {
+  .verifymesh-auth-page .rise,
+  .verifymesh-auth-page .card-in,
+  .verifymesh-auth-page .art .pop {
+    opacity: 1 !important;
+    transform: none !important;
+    animation: none !important;
+  }
+  .verifymesh-auth-page .art .draw {
+    stroke-dashoffset: 0 !important;
+    animation: none !important;
+  }
+  .verifymesh-auth-page .art .sphere,
+  .verifymesh-auth-page .art .spin,
+  .verifymesh-auth-page .logo,
+  .verifymesh-auth-page .blob,
+  .verifymesh-auth-page .card-in::before,
+  .verifymesh-auth-page .art .pulse {
+    animation: none !important;
+  }
+}

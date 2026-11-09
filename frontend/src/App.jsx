@@ -9,9 +9,17 @@ import { AdminDashboard } from './pages/AdminDashboard';
 import { CreateTaskPage } from './pages/CreateTaskPage';
 import { AssessmentPage } from './pages/AssessmentPage';
 import { AssessmentResultsPage } from './pages/AssessmentResultsPage';
+import { SupervisorVerifyPage } from './pages/SupervisorVerifyPage';
+
+// Helper to check whether user has a workforce officer / operational admin role
+const isWorkforceRole = (userRole) => 
+  ['Workforce Officer', 'WORKFORCE_OFFICER', 'Administrator', 'ADMIN'].includes(userRole);
+
+const getRoleDashboard = (userRole) =>
+  isWorkforceRole(userRole) ? '/workforce/dashboard' : '/dashboard';
 
 // Protected Route wrapper that redirects unauthenticated users
-const ProtectedRoute = ({ children, allowedRole }) => {
+const ProtectedRoute = ({ children, allowedRole, allowedRoles }) => {
   const { isAuthenticated, role, isInitializing } = useAuth();
 
   if (isInitializing) {
@@ -26,9 +34,14 @@ const ProtectedRoute = ({ children, allowedRole }) => {
     return <Navigate to="/login" replace />;
   }
 
-  if (allowedRole && role !== allowedRole) {
-    // If user's role doesn't match this route, redirect to their assigned dashboard
-    return <Navigate to={role === 'Administrator' || role === 'ADMIN' ? '/admin/dashboard' : '/dashboard'} replace />;
+  const authorized = allowedRoles 
+    ? allowedRoles.includes(role) || (allowedRoles.includes('Workforce Officer') && isWorkforceRole(role))
+    : allowedRole
+    ? role === allowedRole || (allowedRole === 'Workforce Officer' && isWorkforceRole(role)) || (allowedRole === 'Administrator' && isWorkforceRole(role))
+    : true;
+
+  if (!authorized) {
+    return <Navigate to={getRoleDashboard(role)} replace />;
   }
 
   return children;
@@ -47,7 +60,7 @@ const PublicOnlyRoute = ({ children }) => {
   }
 
   if (isAuthenticated) {
-    return <Navigate to={role === 'Administrator' || role === 'ADMIN' ? '/admin/dashboard' : '/dashboard'} replace />;
+    return <Navigate to={getRoleDashboard(role)} replace />;
   }
 
   return children;
@@ -75,6 +88,9 @@ export default function App() {
               </PublicOnlyRoute>
             }
           />
+
+          {/* Public Supervisor Employment Verification Portal */}
+          <Route path="/verify-experience" element={<SupervisorVerifyPage />} />
 
           {/* Role-Specific Dashboards & Agent Routes */}
           <Route
@@ -149,29 +165,48 @@ export default function App() {
               </ProtectedRoute>
             }
           />
+          {/* Workforce Officer Portal Routes */}
           <Route
-            path="/admin/dashboard"
+            path="/workforce/dashboard"
             element={
-              <ProtectedRoute allowedRole="Administrator">
+              <ProtectedRoute allowedRole="Workforce Officer">
                 <AdminDashboard />
               </ProtectedRoute>
             }
           />
           <Route
-            path="/admin/tasks/create"
+            path="/workforce/tasks/create"
             element={
-              <ProtectedRoute allowedRole="Administrator">
+              <ProtectedRoute allowedRole="Workforce Officer">
                 <CreateTaskPage />
               </ProtectedRoute>
             }
           />
           <Route
-            path="/admin/tasks/:taskId/edit"
+            path="/workforce/tasks/:taskId/edit"
             element={
-              <ProtectedRoute allowedRole="Administrator">
+              <ProtectedRoute allowedRole="Workforce Officer">
                 <CreateTaskPage />
               </ProtectedRoute>
             }
+          />
+
+          {/* Backward-Compatible Admin Redirects */}
+          <Route
+            path="/admin/dashboard"
+            element={<Navigate to="/workforce/dashboard" replace />}
+          />
+          <Route
+            path="/admin/tasks/create"
+            element={<Navigate to="/workforce/tasks/create" replace />}
+          />
+          <Route
+            path="/admin/tasks/:taskId/edit"
+            element={<Navigate to="/workforce/tasks/:taskId/edit" replace />}
+          />
+          <Route
+            path="/admin"
+            element={<Navigate to="/workforce/dashboard" replace />}
           />
 
           {/* Catch-all redirect to /login */}

@@ -352,8 +352,18 @@ export const AssessmentResultsPage = () => {
                 <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1.5 text-xs">
                   <div className="flex items-center justify-between">
                     <span className="text-slate-500">All Topics Passed:</span>
-                    <span className={`font-bold ${task_eligibility.all_topics_passed ? 'text-emerald-600' : 'text-amber-600'}`}>
-                      {task_eligibility.all_topics_passed ? '✓ Yes' : '✗ Outstanding'}
+                    <span className={`font-bold ${
+                      task_eligibility.all_topics_passed === 'Not Required'
+                        ? 'text-slate-500'
+                        : task_eligibility.all_topics_passed
+                        ? 'text-emerald-600'
+                        : 'text-amber-600'
+                    }`}>
+                      {task_eligibility.all_topics_passed === 'Not Required'
+                        ? 'Not Required'
+                        : task_eligibility.all_topics_passed
+                        ? '✓ Yes'
+                        : '✗ Outstanding'}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
@@ -404,9 +414,9 @@ export const AssessmentResultsPage = () => {
                   }`}
                 >
                   <div>
-                    <span className="text-xs font-bold text-slate-900 block">{rt.name}</span>
+                    <span className="text-xs font-bold text-slate-900 block">{rt.name || rt.topic_name}</span>
                     <span className="text-[11px] text-slate-500">
-                      Passing Threshold: {rt.passing_threshold}% &bull; 5 Questions
+                      Passing Threshold: {rt.passing_threshold ?? rt.passing_score ?? 70}% &bull; 5 Questions
                     </span>
                   </div>
 
@@ -417,7 +427,7 @@ export const AssessmentResultsPage = () => {
                       ? 'bg-rose-100 text-rose-800 border-rose-300'
                       : 'bg-amber-100 text-amber-800 border-amber-300'
                   }`}>
-                    {rt.status === 'Passed' ? `✓ Passed (${rt.latest_score}%)` : rt.status === 'Failed' ? `✗ Failed (${rt.latest_score}%)` : 'Needed'}
+                    {rt.status === 'Passed' ? `✓ Passed (${rt.latest_score ?? rt.score ?? 0}%)` : rt.status === 'Failed' ? `✗ Failed (${rt.latest_score ?? rt.score ?? 0}%)` : 'Needed'}
                   </span>
                 </div>
               ))}

@@ -2,7 +2,7 @@ import { api } from './api';
 
 export const competencyService = {
   /**
-   * Send agent features to Flask backend for inference using the 3-way decision model
+   * Send agent features to Flask backend for inference using the binary eligibility model
    * @param {Object} agentData
    * @returns {Promise<Object>}
    */
@@ -160,6 +160,34 @@ export const competencyService = {
   },
 
   /**
+   * Resend the supervisor verification email
+   * @param {number|string} experienceId
+   * @returns {Promise<Object>}
+   */
+  async resendSupervisorEmail(experienceId) {
+    return api.post(`/competency/experiences/${experienceId}/resend`);
+  },
+
+  /**
+   * Public: Fetch details of a work experience record using verification token
+   * @param {string} token
+   * @returns {Promise<Object>}
+   */
+  async getPublicExperienceVerification(token) {
+    return api.get(`/competency/public/verify-experience/${token}`);
+  },
+
+  /**
+   * Public: Submit supervisor confirmation or dispute
+   * @param {string} token
+   * @param {Object} data - { decision: 'CONFIRM'|'DISPUTE', feedback, answers }
+   * @returns {Promise<Object>}
+   */
+  async submitPublicExperienceVerification(token, data) {
+    return api.post(`/competency/public/verify-experience/${token}`, data);
+  },
+
+  /**
    * Fetch agent certification records
    * @returns {Promise<Object>}
    */
@@ -254,5 +282,13 @@ export const competencyService = {
    */
   async getTaskDetails(taskId) {
     return api.get(`/competency/tasks/${taskId}`);
+  },
+
+  /**
+   * Fetch all submitted task applications and live assignment statuses for the authenticated agent
+   * @returns {Promise<Object>}
+   */
+  async getAgentApplications() {
+    return api.get('/competency/applications');
   },
 };

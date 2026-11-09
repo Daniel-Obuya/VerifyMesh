@@ -83,8 +83,9 @@ export const AssessmentPage = () => {
         // Priority:
         // 1. requestedTopicId from query params
         // 2. First unpassed topic required by task
-        // 3. First required topic
-        // 4. First available topic in system
+        // 3. First required topic for task
+        // 4. Topic linked to loadedTask.exam_id
+        // 5. First available topic ONLY if task does NOT require a specific assessment
         let activeTopic = null;
         if (requestedTopicId) {
           activeTopic = availableTopics.find(t => t.topic_id === Number(requestedTopicId));
@@ -97,8 +98,16 @@ export const AssessmentPage = () => {
           activeTopic = availableTopics.find(t => t.topic_id === targetReq.topic_id) || targetReq;
         }
 
-        if (!activeTopic && availableTopics.length > 0) {
-          activeTopic = availableTopics[0];
+        if (!activeTopic && loadedTask && loadedTask.exam_id) {
+          activeTopic = availableTopics.find(t => t.exam_id === loadedTask.exam_id);
+        }
+
+        if (!activeTopic) {
+          if (loadedTask && loadedTask.exam_required) {
+            setErrorMessage('Configured task assessment template is not available or has no linked topics.');
+          } else if (availableTopics.length > 0) {
+            activeTopic = availableTopics[0];
+          }
         }
 
         setSelectedTopic(activeTopic);
@@ -367,10 +376,10 @@ export const AssessmentPage = () => {
                           >
                             <div className="space-y-0.5">
                               <span className="text-xs font-bold text-slate-900 block">
-                                {rt.name}
+                                {rt.name || rt.topic_name}
                               </span>
                               <span className="text-[11px] text-slate-500">
-                                5 Scenario Questions &bull; Pass Threshold: {rt.passing_threshold}%
+                                5 Scenario Questions &bull; Pass Threshold: {rt.passing_threshold ?? rt.passing_score ?? 70}%
                               </span>
                             </div>
 
