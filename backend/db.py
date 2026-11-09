@@ -9,6 +9,7 @@ import json
 import os
 import uuid
 import math
+import secrets
 
 logger = logging.getLogger('verifymesh.db')
 
@@ -17,6 +18,10 @@ ROLE_MAP = {
     "AGENT": "Agent",
     "Administrator": "Administrator",
     "Agent": "Agent",
+    "WORKFORCE_OFFICER": "Workforce Officer",
+    "Workforce Officer": "Workforce Officer",
+    "PLATFORM_ADMIN": "Platform Administrator",
+    "Platform Administrator": "Platform Administrator",
 }
 
 def normalize_role(raw_role):
@@ -507,6 +512,7 @@ def get_assessment_topics_list():
                     top.passing_score, 
                     top.estimated_minutes,
                     c.category_name,
+                    MAX(eq.exam_id) AS exam_id,
                     COUNT(eq.question_id) AS total_questions,
                     COUNT(eq.question_id) AS question_count
                 FROM assessment_topics top
@@ -725,7 +731,7 @@ def save_agent_assessment(user_id, assessment_data, competency_level, confidence
             attempt_number = attempt_row["next_attempt"] if attempt_row else 1
 
             # 4. Extract assessment score and determine pass status
-            raw_score = float(assessment_data.get("assessment_score", 0.0))
+            raw_score = float(assessment_data.get("attempt_score") if assessment_data.get("attempt_score") is not None else assessment_data.get("assessment_score", 0.0))
             score = max(0.0, min(100.0, raw_score))  # satisfies chk_exam_result_score
             cursor.execute("SELECT passing_score FROM exams WHERE exam_id = %s", (active_exam_id,))
             ex_row = cursor.fetchone()
@@ -794,10 +800,10 @@ def save_agent_assessment(user_id, assessment_data, competency_level, confidence
             # 9. If task_id provided, record in eligibility_evaluations and eligibility_checks
             eval_id = None
             if task_id:
-                is_model_eligible = (predicted_enum in ("ELIGIBLE", "COMPETENT", "ADVANCED"))
-                eligibility_status = "ELIGIBLE" if (passed and is_model_eligible) else "NOT_ELIGIBLE"
+                # Deterministic evaluation: eligibility is governed strictly by exam pass status
+                eligibility_status = "ELIGIBLE" if passed else "NOT_ELIGIBLE"
                 review_status = "NOT_REQUIRED"
-                explanation = f"Evaluated competency: {predicted_enum} with assessment score {score:.1f}% on Exam {active_exam_id}."
+                explanation = f"Evaluated deterministically: {'PASSED' if passed else 'FAILED'} assessment with score {score:.1f}% on Exam {active_exam_id}."
 
                 cursor.execute("""
                     INSERT INTO eligibility_evaluations 
@@ -813,7 +819,7 @@ def save_agent_assessment(user_id, assessment_data, competency_level, confidence
                     (%s, 'COMPETENCY', 'ELIGIBLE', %s, %s, %s)
                 """, (
                     eval_id, f"Passing Score >= {passing_score:.1f}%", f"{score:.1f}%", passed, None if passed else "Assessment score below passing threshold",
-                    eval_id, predicted_enum, 1 if is_model_eligible else 0, None if is_model_eligible else f"Competency {predicted_enum} is not Eligible"
+                    eval_id, "ELIGIBLE" if passed else "NOT_ELIGIBLE", 1 if passed else 0, None if passed else "Assessment score below passing threshold"
                 ))
 
             # 10. Insert audit log event with full assessment payload
@@ -1061,8 +1067,23 @@ def get_agent_tasks_with_eligibility(user_id):
                 """, (agent_id, reset_time, reset_time))
                 latest_topic_results = {r["topic_id"]: r for r in cursor.fetchall()}
 
-            # 5c. Query all task-to-topic requirements
+            # 5c. Query all task-to-topic requirements and multi-cert requirements
             task_topics_map = {}
+            exam_topics_map = {}
+            task_certs_map = {}
+            try:
+                cursor.execute("""
+                    SELECT tc.task_id, tc.certification_id, c.certification_name
+                    FROM task_certifications tc
+                    JOIN certifications c ON tc.certification_id = c.certification_id
+                    WHERE tc.is_mandatory = 1
+                    ORDER BY tc.task_id, tc.certification_id
+                """)
+                for row in cursor.fetchall():
+                    task_certs_map.setdefault(row["task_id"], []).append(row)
+            except Exception as e:
+                logger.warning(f"Could not load task_certifications: {e}")
+
             try:
                 cursor.execute("""
                     SELECT 
@@ -1082,6 +1103,26 @@ def get_agent_tasks_with_eligibility(user_id):
                     task_topics_map.setdefault(row["task_id"], []).append(row)
             except Exception as e:
                 logger.warning(f"Could not load task_assessment_topics: {e}")
+
+            try:
+                cursor.execute("""
+                    SELECT DISTINCT
+                        eq.exam_id,
+                        top.topic_id,
+                        1 AS is_mandatory,
+                        top.topic_name,
+                        top.description AS topic_description,
+                        top.passing_score AS topic_passing_score,
+                        top.estimated_minutes
+                    FROM exam_questions eq
+                    JOIN assessment_topics top ON eq.topic_id = top.topic_id
+                    WHERE top.status = 'ACTIVE'
+                    ORDER BY eq.exam_id, top.topic_id
+                """)
+                for row in cursor.fetchall():
+                    exam_topics_map.setdefault(row["exam_id"], []).append(row)
+            except Exception as e:
+                logger.warning(f"Could not load exam_topics_map: {e}")
 
             # 6. Retrieve all active tasks and requirements
             cursor.execute("""
@@ -1133,13 +1174,22 @@ def get_agent_tasks_with_eligibility(user_id):
                 min_exp = int(t["minimum_experience_months"] or 0)
                 exam_req = bool(t["exam_required"])
 
-                # Check 1: Mandatory Certification
-                if req_cert_id is not None:
-                    has_cert = req_cert_id in active_certs
-                    cert_pending = req_cert_id in pending_certs
-                else:
-                    has_cert = True
-                    cert_pending = False
+                # Check 1: Mandatory Certifications (support multi-certifications via task_certifications)
+                task_req_certs = task_certs_map.get(t_id, [])
+                if not task_req_certs and req_cert_id is not None:
+                    task_req_certs = [{"certification_id": req_cert_id, "certification_name": req_cert_name}]
+
+                has_cert = True
+                cert_pending = False
+                missing_cert_names = []
+                for c_item in task_req_certs:
+                    c_id = c_item["certification_id"]
+                    c_name = c_item["certification_name"]
+                    if c_id not in active_certs:
+                        has_cert = False
+                        missing_cert_names.append(c_name)
+                        if c_id in pending_certs:
+                            cert_pending = True
 
                 # Check 2: Task Assessment Topics & Exams
                 req_exam_id = t.get("exam_id")
@@ -1148,6 +1198,9 @@ def get_agent_tasks_with_eligibility(user_id):
                 exam_passed = bool(latest_res["passed"]) if latest_res and latest_res.get("passed") is not None else False
 
                 configured_topics = task_topics_map.get(t_id, [])
+                if not configured_topics and req_exam_id and exam_req:
+                    configured_topics = exam_topics_map.get(req_exam_id, [])
+
                 required_topics_details = []
                 all_mandatory_topics_passed = True
 
@@ -1156,13 +1209,18 @@ def get_agent_tasks_with_eligibility(user_id):
                         top_id = c_top["topic_id"]
                         is_mand = bool(c_top["is_mandatory"])
                         top_passing = float(c_top["topic_passing_score"])
-                        top_passed = (top_id in passed_topic_ids) and not is_reset
                         top_latest = latest_topic_results.get(top_id) if not is_reset else None
                         top_score = float(top_latest["score"]) if top_latest and top_latest.get("score") is not None else None
+                        # Authoritative latest attempt determines pass/fail against required threshold
+                        top_passed = (
+                            bool(top_latest and top_latest.get("passed"))
+                            and not is_reset
+                            and (top_score is not None and top_score >= top_passing)
+                        )
 
                         if top_passed:
                             top_status = "Passed"
-                        elif top_latest and not top_latest.get("passed"):
+                        elif top_latest and not top_passed:
                             top_status = "Failed"
                         else:
                             top_status = "Needed"
@@ -1173,21 +1231,30 @@ def get_agent_tasks_with_eligibility(user_id):
                         required_topics_details.append({
                             "topic_id": top_id,
                             "topic_name": c_top["topic_name"],
+                            "name": c_top["topic_name"],
                             "description": c_top["topic_description"],
                             "passing_score": top_passing,
+                            "passing_threshold": top_passing,
                             "estimated_minutes": c_top["estimated_minutes"],
                             "is_mandatory": is_mand,
                             "status": top_status,
-                            "score": top_score
+                            "score": top_score,
+                            "latest_score": top_score
                         })
 
                 if exam_req:
                     if configured_topics:
                         has_assessment_completed = all(top["score"] is not None for top in required_topics_details if top["is_mandatory"]) if required_topics_details else False
-                        has_assessment = all_mandatory_topics_passed
+                        has_assessment = all_mandatory_topics_passed and bool(required_topics_details)
                     elif req_exam_id and not is_reset:
                         has_assessment_completed = latest_res is not None
-                        has_assessment = req_exam_id in passed_exam_ids
+                        req_passing_score = float(t["exam_passing_score"]) if t.get("exam_passing_score") is not None else 70.0
+                        has_assessment = bool(
+                            latest_res is not None 
+                            and latest_res.get("passed") 
+                            and exam_score is not None 
+                            and exam_score >= req_passing_score
+                        )
                     else:
                         has_assessment_completed = has_assessed
                         has_assessment = bool(pred_row and pred_row["passed"] and not is_reset)
@@ -1213,11 +1280,14 @@ def get_agent_tasks_with_eligibility(user_id):
                 else:
                     exam_status = "Not Started"
 
-                # Check 3: Competency Threshold
-                # Under the binary workflow, model outputs 'Eligible' or 'Not Eligible'.
-                # A task requires minimum_competency = 'ELIGIBLE' (or legacy COMPETENT/ADVANCED).
-                agent_is_eligible = has_assessed and (agent_comp_enum in ("ELIGIBLE", "COMPETENT", "ADVANCED") or agent_comp_label == "Eligible")
-                meets_comp = agent_is_eligible if min_comp in ("ELIGIBLE", "COMPETENT", "ADVANCED") else True
+                # Check 3: Competency / Deterministic Eligibility
+                # Mandatory eligibility is evaluated entirely via deterministic server-side business rules.
+                if not exam_req:
+                    meets_comp = True
+                elif has_assessed:
+                    meets_comp = (agent_decision == "Eligible")
+                else:
+                    meets_comp = has_assessment
 
                 # Check 4: Experience
                 meets_exp = agent_exp_months >= min_exp
@@ -1237,36 +1307,32 @@ def get_agent_tasks_with_eligibility(user_id):
                 elif app_status in ("Application Submitted", "Under Review", "Shortlisted", "Rejected", "Withdrawn"):
                     state = app_status
                 elif not has_cert:
+                    missing_label = ", ".join(missing_cert_names) if missing_cert_names else (req_cert_name or "Required certification")
                     if cert_pending:
                         state = "Verification Pending"
-                        blocking_reason = f"Required certification '{req_cert_name}' is pending review"
+                        blocking_reason = f"Required certification '{missing_label}' is pending review"
                     else:
                         state = "Certification Required"
-                        blocking_reason = f"Mandatory certification required: {req_cert_name}"
+                        blocking_reason = f"Mandatory certification required: {missing_label}"
                 elif agent_status == "SUSPENDED":
                     state = "Verification Pending"
                     blocking_reason = "Agent account is awaiting administrative verification"
                 elif not has_assessment_completed:
                     state = "Assessment Needed"
-                    blocking_reason = "Task-specific competency evaluation required"
-                elif has_cert and has_assessment and meets_comp and meets_exp:
+                    blocking_reason = "Not Eligible: Mandatory task assessment exam required"
+                elif not has_assessment:
+                    state = "Assessment Needed"
+                    blocking_reason = "Not Eligible: Assessment passing score requirement not satisfied"
+                elif not meets_exp:
+                    state = f"Requires {min_exp} Months Exp"
+                    blocking_reason = f"Agent has {agent_exp_months} months verified experience; task requires {min_exp} months"
+                elif has_cert and has_assessment and meets_exp and agent_status == "ACTIVE":
                     state = "Ready to Apply"
                     can_apply = True
                     is_eligible = True
                 else:
-                    # Specific blocking reason
-                    if not meets_comp:
-                        state = "Ineligible"
-                        blocking_reason = "Competency evaluation result is Not Eligible"
-                    elif not meets_exp:
-                        state = f"Requires {min_exp} Months Exp"
-                        blocking_reason = f"Agent has {agent_exp_months} months verified experience; task requires {min_exp} months"
-                    elif not has_assessment:
-                        state = "Assessment Needed"
-                        blocking_reason = "Assessment passing score requirement not satisfied"
-                    else:
-                        state = "Prerequisites Unmet"
-                        blocking_reason = "Task requirements not met"
+                    state = "Prerequisites Unmet"
+                    blocking_reason = "Task requirements not met"
 
                 # Calculate structured payout string
                 pay_type = t.get("payment_type") or "Fixed Budget"
@@ -1309,13 +1375,14 @@ def get_agent_tasks_with_eligibility(user_id):
                     "exam_status": exam_status,
                     "exam_score": exam_score,
                     "required_competency": COMPETENCY_ENUM_TO_LABEL.get(min_comp, min_comp),
-                    "required_certification": req_cert_name or "None required",
+                    "required_certification": ", ".join([c["certification_name"] for c in task_req_certs]) if task_req_certs else (req_cert_name or "None required"),
+                    "required_certifications": [serialize_sql_row(c) for c in task_req_certs],
                     "minimum_experience_months": min_exp,
                     "exam_required": exam_req,
                     "required_topics": required_topics_details,
                     "topics_total": len(required_topics_details),
                     "topics_passed_count": sum(1 for top in required_topics_details if top["status"] == "Passed"),
-                    "all_topics_passed": all_mandatory_topics_passed if configured_topics else has_assessment,
+                    "all_topics_passed": "Not Required" if not exam_req else (all_mandatory_topics_passed and bool(required_topics_details) if configured_topics else has_assessment),
                     "payout": payout_str,
                     "state": state,
                     "is_eligible": is_eligible,
@@ -1355,6 +1422,17 @@ def apply_for_task(user_id, task_id, notes=None):
         if target.get("application_status") and target["application_status"] != "Not Applied":
             raise ValueError(f"Cannot apply: An active application has already been submitted (Status: {target['application_status']}).")
         raise ValueError(f"Cannot apply: {target['blocking_reason'] or target['state']}")
+
+    # Independent server-side prerequisite validation
+    prereqs = target.get("prerequisites", {})
+    if target.get("exam_required") and not prereqs.get("assessment_met"):
+        raise ValueError("Cannot apply: Mandatory task assessment has not been passed with the required score.")
+    if not prereqs.get("competency_met"):
+        raise ValueError("Cannot apply: Agent competency requirement not met.")
+    if not prereqs.get("experience_met"):
+        raise ValueError("Cannot apply: Minimum experience requirement not met.")
+    if not prereqs.get("certification_met"):
+        raise ValueError("Cannot apply: Required certification not verified.")
 
     conn = get_mysql_connection()
     if not conn:
@@ -1761,13 +1839,21 @@ def get_admin_overview_metrics():
                     (SELECT COUNT(*) FROM exam_results) AS total_assessments,
                     (SELECT COUNT(*) FROM exam_results WHERE passed = 1) AS passed_assessments,
                     (SELECT COUNT(*) FROM eligibility_evaluations WHERE review_status = 'PENDING') AS pending_reviews,
-                    (SELECT COUNT(*) FROM eligibility_evaluations WHERE review_status IN ('APPROVED', 'REJECTED')) AS completed_reviews
+                    (SELECT COUNT(*) FROM eligibility_evaluations WHERE review_status IN ('APPROVED', 'REJECTED')) AS completed_reviews,
+                    (SELECT COUNT(*) FROM agent_certifications WHERE status = 'PENDING') AS pending_certifications,
+                    (SELECT COUNT(*) FROM agent_experience WHERE verification_status = 'PENDING') AS pending_experiences,
+                    (SELECT COUNT(*) FROM task_applications WHERE status IN ('Application Submitted', 'Under Review')) AS applications_under_review,
+                    (SELECT COUNT(*) FROM task_applications) AS total_applications,
+                    (SELECT COUNT(*) FROM task_applications WHERE status = 'Shortlisted') AS applications_shortlisted,
+                    (SELECT COUNT(*) FROM task_applications WHERE status = 'Assigned') AS applications_assigned,
+                    (SELECT COUNT(*) FROM task_applications WHERE status = 'Rejected') AS applications_rejected
             """)
             counts = serialize_sql_row(cursor.fetchone() or {})
+            counts["pending_verifications"] = int(counts.get("pending_certifications") or 0) + int(counts.get("pending_experiences") or 0)
 
             # 2. Active Model Record
             cursor.execute("""
-                SELECT model_id, model_name, model_version, algorithm, feature_set_version, is_active, created_at
+                SELECT model_id, model_name, model_version, algorithm, feature_set_version, accuracy, macro_f1, is_active, created_at
                 FROM ml_models
                 WHERE is_active = 1
                 ORDER BY model_id DESC LIMIT 1
@@ -1833,7 +1919,11 @@ def get_admin_agents():
                     latest_p.predicted_at,
                     latest_er.assessment_score,
                     latest_er.attempt_number,
-                    (SELECT COUNT(*) FROM exam_results WHERE agent_id = a.agent_id) AS total_attempts
+                    (SELECT COUNT(*) FROM exam_results WHERE agent_id = a.agent_id) AS total_attempts,
+                    (SELECT COUNT(*) FROM agent_certifications WHERE agent_id = a.agent_id AND status = 'VERIFIED') AS verified_certifications_count,
+                    (SELECT COUNT(*) FROM agent_experience WHERE agent_id = a.agent_id AND verification_status = 'VERIFIED') AS verified_experiences_count,
+                    (SELECT COUNT(*) FROM agent_certifications WHERE agent_id = a.agent_id) AS total_certifications_count,
+                    (SELECT COUNT(*) FROM agent_experience WHERE agent_id = a.agent_id) AS total_experiences_count
                 FROM agents a
                 JOIN users u ON a.user_id = u.user_id
                 LEFT JOIN (
@@ -1960,15 +2050,33 @@ def get_task_metadata():
             """)
             exams = [serialize_sql_row(r) for r in cursor.fetchall()]
 
+            cursor.execute("""
+                SELECT 
+                    top.topic_id, 
+                    top.topic_name, 
+                    top.category_id, 
+                    c.category_name,
+                    top.description, 
+                    top.passing_score, 
+                    top.estimated_minutes,
+                    top.status
+                FROM assessment_topics top
+                LEFT JOIN categories c ON top.category_id = c.category_id
+                WHERE top.status = 'ACTIVE'
+                ORDER BY top.topic_name ASC
+            """)
+            topics = [serialize_sql_row(r) for r in cursor.fetchall()]
+
             return {
                 "categories": categories,
                 "certifications": certifications,
                 "skills": skills,
-                "exams": exams
+                "exams": exams,
+                "topics": topics
             }
     except Exception as e:
         logger.error(f"Error fetching task metadata: {e}")
-        return {"categories": [], "certifications": [], "skills": [], "exams": []}
+        return {"categories": [], "certifications": [], "skills": [], "exams": [], "topics": []}
     finally:
         conn.close()
 
@@ -2026,7 +2134,57 @@ def get_admin_task_detail(task_id):
                 LIMIT 1
             """, (task_id,))
             row = cursor.fetchone()
-            return serialize_sql_row(row) if row else None
+            if not row:
+                return None
+
+            task_data = serialize_sql_row(row)
+
+            # Query multi-selected certifications
+            try:
+                cursor.execute("""
+                    SELECT tc.certification_id, c.certification_name, c.description, c.validity_period_months
+                    FROM task_certifications tc
+                    JOIN certifications c ON tc.certification_id = c.certification_id
+                    WHERE tc.task_id = %s
+                """, (task_id,))
+                cert_rows = cursor.fetchall()
+                if cert_rows:
+                    task_data["required_certification_ids"] = [r["certification_id"] for r in cert_rows]
+                    task_data["certifications"] = [serialize_sql_row(r) for r in cert_rows]
+                elif task_data.get("required_certification_id"):
+                    task_data["required_certification_ids"] = [task_data["required_certification_id"]]
+                    task_data["certifications"] = [{
+                        "certification_id": task_data["required_certification_id"],
+                        "certification_name": task_data.get("certification_name")
+                    }]
+                else:
+                    task_data["required_certification_ids"] = []
+                    task_data["certifications"] = []
+            except Exception as e:
+                logger.warning(f"Could not load task_certifications for detail: {e}")
+                if task_data.get("required_certification_id"):
+                    task_data["required_certification_ids"] = [task_data["required_certification_id"]]
+                else:
+                    task_data["required_certification_ids"] = []
+                task_data["certifications"] = []
+
+            # Query multi-selected assessment topics
+            try:
+                cursor.execute("""
+                    SELECT tat.topic_id, top.topic_name, top.description, top.passing_score, top.estimated_minutes
+                    FROM task_assessment_topics tat
+                    JOIN assessment_topics top ON tat.topic_id = top.topic_id
+                    WHERE tat.task_id = %s
+                """, (task_id,))
+                topic_rows = cursor.fetchall()
+                task_data["required_topic_ids"] = [r["topic_id"] for r in topic_rows]
+                task_data["topics"] = [serialize_sql_row(r) for r in topic_rows]
+            except Exception as e:
+                logger.warning(f"Could not load task_assessment_topics for detail: {e}")
+                task_data["required_topic_ids"] = []
+                task_data["topics"] = []
+
+            return task_data
     except Exception as e:
         logger.error(f"Error fetching task {task_id} detail: {e}")
         return None
@@ -2111,8 +2269,8 @@ def _validate_task_payload(task_data, cursor=None):
     fixed_budget = None
 
     if payment_type == "Hourly":
-        raw_h_min = task_data.get("hourly_rate_min")
-        raw_h_max = task_data.get("hourly_rate_max")
+        raw_h_min = task_data.get("hourly_rate_min") if task_data.get("hourly_rate_min") is not None else task_data.get("hourly_rate")
+        raw_h_max = task_data.get("hourly_rate_max") if task_data.get("hourly_rate_max") is not None else task_data.get("max_hourly_rate")
 
         if is_publish:
             if raw_h_min in (None, ""):
@@ -2144,7 +2302,7 @@ def _validate_task_payload(task_data, cursor=None):
                     pass
 
     elif payment_type == "Fixed Budget":
-        raw_budget = task_data.get("fixed_budget")
+        raw_budget = task_data.get("fixed_budget") if task_data.get("fixed_budget") is not None else task_data.get("total_budget")
         if is_publish:
             if raw_budget in (None, ""):
                 raise ValueError("Total fixed budget is required for fixed-price work.")
@@ -2162,7 +2320,7 @@ def _validate_task_payload(task_data, cursor=None):
                     pass
 
     # Positions count
-    raw_positions = task_data.get("positions_count", 1)
+    raw_positions = task_data.get("positions_count") if task_data.get("positions_count") is not None else task_data.get("positions_available", 1)
     try:
         positions_count = max(1, int(raw_positions or 1))
     except (ValueError, TypeError):
@@ -2195,23 +2353,37 @@ def _validate_task_payload(task_data, cursor=None):
     if min_comp not in ("ELIGIBLE", "NOT_ELIGIBLE", "NEEDS_IMPROVEMENT", "BASIC", "COMPETENT", "ADVANCED"):
         min_comp = "ELIGIBLE"
 
-    raw_min_exp = task_data.get("minimum_experience_months", 0)
+    raw_min_exp = task_data.get("minimum_experience_months") if task_data.get("minimum_experience_months") is not None else task_data.get("min_experience_months", 0)
     try:
         min_exp = max(0, int(raw_min_exp or 0))
     except (ValueError, TypeError):
         min_exp = 0
 
-    raw_cert_id = task_data.get("required_certification_id")
-    cert_id = None
-    if raw_cert_id not in (None, "", "NONE", 0, "0"):
+    # Certifications: accept required_certification_ids (list) or legacy required_certification_id (int)
+    raw_cert_ids = task_data.get("required_certification_ids")
+    cert_ids = []
+    if isinstance(raw_cert_ids, list):
+        for cid in raw_cert_ids:
+            try:
+                if cid not in (None, "", 0, "0"):
+                    cert_ids.append(int(cid))
+            except (ValueError, TypeError):
+                pass
+    elif task_data.get("required_certification_id") not in (None, "", "NONE", 0, "0"):
         try:
-            cert_id = int(raw_cert_id)
-            if cursor:
-                cursor.execute("SELECT certification_id FROM certifications WHERE certification_id = %s", (cert_id,))
-                if not cursor.fetchone():
-                    raise ValueError(f"Certification ID {cert_id} does not exist.")
+            cert_ids.append(int(task_data["required_certification_id"]))
         except (ValueError, TypeError):
-            raise ValueError("Invalid certification ID.")
+            pass
+
+    if cursor and cert_ids:
+        format_strings = ','.join(['%s'] * len(cert_ids))
+        cursor.execute(f"SELECT certification_id FROM certifications WHERE certification_id IN ({format_strings})", tuple(cert_ids))
+        existing_cids = {r["certification_id"] for r in cursor.fetchall()}
+        invalid_cids = [cid for cid in cert_ids if cid not in existing_cids]
+        if invalid_cids:
+            raise ValueError(f"Certification ID(s) {invalid_cids} do not exist.")
+
+    primary_cert_id = cert_ids[0] if cert_ids else None
 
     raw_skill_id = task_data.get("required_skill_id")
     skill_id = None
@@ -2230,8 +2402,18 @@ def _validate_task_payload(task_data, cursor=None):
             min_skill_score = None
 
     # Section D: Assessment configuration
-    exam_req = 1 if bool(task_data.get("exam_required", False)) else 0
+    exam_req = 1 if bool(task_data.get("exam_required") or task_data.get("assessment_required")) else 0
     raw_exam_id = task_data.get("exam_id")
+    raw_topic_ids = task_data.get("required_topic_ids")
+    topic_ids = []
+    if isinstance(raw_topic_ids, list):
+        for tid in raw_topic_ids:
+            try:
+                if tid not in (None, "", 0, "0"):
+                    topic_ids.append(int(tid))
+            except (ValueError, TypeError):
+                pass
+
     exam_id = None
 
     if exam_req:
@@ -2242,6 +2424,25 @@ def _validate_task_payload(task_data, cursor=None):
                 raise ValueError("Invalid exam template ID.")
 
         if cursor:
+            # Validate assessment topics if provided
+            if topic_ids:
+                format_strings = ','.join(['%s'] * len(topic_ids))
+                cursor.execute(f"SELECT topic_id FROM assessment_topics WHERE topic_id IN ({format_strings}) AND status = 'ACTIVE'", tuple(topic_ids))
+                existing_tids = {r["topic_id"] for r in cursor.fetchall()}
+                invalid_tids = [tid for tid in topic_ids if tid not in existing_tids]
+                if invalid_tids:
+                    raise ValueError(f"Assessment topic ID(s) {invalid_tids} are not active or do not exist.")
+
+                # If exam_id is not given, resolve it from topic_id
+                if not exam_id:
+                    cursor.execute(f"SELECT DISTINCT exam_id FROM exam_questions WHERE topic_id IN ({format_strings}) AND exam_id IS NOT NULL LIMIT 1", tuple(topic_ids))
+                    mapped_row = cursor.fetchone()
+                    if mapped_row and mapped_row.get("exam_id"):
+                        exam_id = mapped_row["exam_id"]
+
+            elif is_publish and not exam_id:
+                raise ValueError("At least one assessment topic must be selected when task assessment is enabled.")
+
             if exam_id:
                 cursor.execute("SELECT exam_id, category_id, status FROM exams WHERE exam_id = %s", (exam_id,))
                 exam_row = cursor.fetchone()
@@ -2254,14 +2455,6 @@ def _validate_task_payload(task_data, cursor=None):
                 matching_exam = cursor.fetchone()
                 if matching_exam:
                     exam_id = matching_exam["exam_id"]
-                elif is_publish:
-                    raise ValueError("No active assessment template found for this category.")
-
-            if is_publish and exam_id:
-                cursor.execute("SELECT COUNT(*) AS cnt FROM exam_questions WHERE exam_id = %s", (exam_id,))
-                q_count = cursor.fetchone()["cnt"]
-                if q_count == 0:
-                    raise ValueError(f"Assessment template ID {exam_id} has no configured questions in the server bank.")
 
     return {
         "task_name": task_name,
@@ -2281,13 +2474,52 @@ def _validate_task_payload(task_data, cursor=None):
         "application_deadline": application_deadline,
         "expected_duration": expected_duration,
         "minimum_competency": min_comp,
-        "required_certification_id": cert_id,
+        "required_certification_id": primary_cert_id,
+        "required_certification_ids": cert_ids,
         "minimum_experience_months": min_exp,
         "required_skill_id": skill_id,
         "minimum_skill_score": min_skill_score,
         "exam_required": exam_req,
-        "exam_id": exam_id
+        "exam_id": exam_id,
+        "required_topic_ids": topic_ids
     }
+
+
+def _sync_task_certifications(cursor, task_id, cert_ids):
+    """Synchronize task_certifications table with selected certification IDs."""
+    try:
+        cursor.execute("DELETE FROM task_certifications WHERE task_id = %s", (task_id,))
+        for cid in cert_ids:
+            cursor.execute("""
+                INSERT IGNORE INTO task_certifications (task_id, certification_id, is_mandatory)
+                VALUES (%s, %s, 1)
+            """, (task_id, cid))
+    except Exception as e:
+        logger.warning(f"Could not sync task_certifications: {e}")
+
+
+def _sync_task_assessment_topics(cursor, task_id, exam_id, exam_required, category_id=None, topic_ids=None):
+    """
+    Synchronize task_assessment_topics with explicit topic_ids (or inferred from exam/category).
+    """
+    cursor.execute("DELETE FROM task_assessment_topics WHERE task_id = %s", (task_id,))
+    if not exam_required:
+        return
+
+    final_topic_ids = list(topic_ids) if topic_ids else []
+    if not final_topic_ids and exam_id:
+        cursor.execute("SELECT DISTINCT topic_id FROM exam_questions WHERE exam_id = %s AND topic_id IS NOT NULL", (exam_id,))
+        final_topic_ids = [r["topic_id"] for r in cursor.fetchall()]
+
+    if not final_topic_ids and category_id:
+        cursor.execute("SELECT topic_id FROM assessment_topics WHERE category_id = %s AND status = 'ACTIVE'", (category_id,))
+        final_topic_ids = [r["topic_id"] for r in cursor.fetchall()]
+
+    for tid in final_topic_ids:
+        cursor.execute("""
+            INSERT IGNORE INTO task_assessment_topics (task_id, topic_id, is_mandatory)
+            VALUES (%s, %s, 1)
+        """, (task_id, tid))
 
 
 def create_task_with_requirements(task_data, admin_user_id=None):
@@ -2332,6 +2564,14 @@ def create_task_with_requirements(task_data, admin_user_id=None):
                 validated["minimum_skill_score"], validated["exam_required"]
             ))
             requirement_id = cursor.lastrowid
+
+            # Synchronize task certifications
+            _sync_task_certifications(cursor, task_id, validated["required_certification_ids"])
+
+            # Synchronize task assessment topics
+            _sync_task_assessment_topics(
+                cursor, task_id, validated["exam_id"], validated["exam_required"], validated["category_id"], validated["required_topic_ids"]
+            )
 
             # Audit log
             cursor.execute("""
@@ -2422,6 +2662,14 @@ def update_task_with_requirements(task_id, task_data, admin_user_id=None):
                     validated["minimum_experience_months"], validated["required_skill_id"],
                     validated["minimum_skill_score"], validated["exam_required"]
                 ))
+
+            # Synchronize task certifications
+            _sync_task_certifications(cursor, task_id, validated["required_certification_ids"])
+
+            # Synchronize task assessment topics
+            _sync_task_assessment_topics(
+                cursor, task_id, validated["exam_id"], validated["exam_required"], validated["category_id"], validated["required_topic_ids"]
+            )
 
             cursor.execute("""
                 INSERT INTO audit_logs (user_id, action, entity_type, entity_id, description, created_at)
@@ -2544,6 +2792,659 @@ def delete_task(task_id, admin_user_id=None):
         conn.close()
 
 
+def build_task_suitability_features(
+    agent_data,
+    task_data,
+    certs=None,
+    topic_scores=None,
+    latest_score=None,
+    strict=False,
+):
+    """
+    Constructs the centralized Stage 2 feature dictionary containing the exact 5-feature
+    Phase 3/4 schema (`STAGE2_V2_FEATURES`: weighted_skill_margin, min_skill_margin,
+    weakest_link_deficit, exp_surplus_tanh, difficulty_tier) alongside the 28-feature
+    legacy keys for backward compatibility.
+
+    When `strict=True` (used in live Stage 2 inference), missing required assessment scores
+    or experience values raise a ValueError rather than fabricating defaults.
+    """
+    from src.stage2_feature_engineering import build_complete_stage2_feature_dict
+
+    if not isinstance(agent_data, dict) or not isinstance(task_data, dict):
+        raise ValueError("agent_data and task_data must be dictionaries.")
+
+    certs = certs or []
+    topic_scores = topic_scores or {}
+
+    if strict:
+        if agent_data.get("experience_months") is None:
+            raise ValueError("Missing applicant 'experience_months' for Stage 2 feature engineering.")
+        if bool(task_data.get("exam_required")) and latest_score is None:
+            raise ValueError("Missing required assessment score for Stage 2 feature engineering.")
+
+    # Task minimums & difficulty
+    task_min_exp = float(task_data.get("minimum_experience_months") or 0.0)
+    task_min_assessment = float(task_data.get("exam_passing_score") or 70.0)
+    task_category = task_data.get("category_name") or task_data.get("task_category")
+
+    # Difficulty tier: 1 (Entry/Low), 2 (Intermediate/Medium), 3 (High/Advanced)
+    if task_data.get("difficulty_tier") in (1, 2, 3, 1.0, 2.0, 3.0):
+        diff_tier = int(task_data["difficulty_tier"])
+    elif task_min_exp >= 24:
+        diff_tier = 3
+    elif task_min_exp >= 12:
+        diff_tier = 2
+    else:
+        diff_tier = 1
+
+    # Applicant attributes
+    app_rel_exp = float(agent_data.get("experience_months") or 0.0)
+    app_sales_exp = float(agent_data.get("sales_experience_months") or 0.0)
+    app_cs_exp = float(agent_data.get("customer_service_experience_months") or 0.0)
+    if app_sales_exp == 0.0 and app_rel_exp > 0.0:
+        app_sales_exp = round(app_rel_exp * 0.4, 1)
+    if app_cs_exp == 0.0 and app_rel_exp > 0.0:
+        app_cs_exp = round(app_rel_exp * 0.4, 1)
+
+    app_cert_count = float(len(certs))
+
+    # Cert flags by category keyword
+    has_sales_cert = 0.0
+    has_cs_cert = 0.0
+    has_tech_cert = 0.0
+    for c in certs:
+        c_name = (c.get("certification_name") or "").lower()
+        if any(w in c_name for w in ("sale", "market", "negotiat", "retail", "business")):
+            has_sales_cert = 1.0
+        if any(w in c_name for w in ("customer", "support", "service", "client", "care")):
+            has_cs_cert = 1.0
+        if any(w in c_name for w in ("tech", "network", "develop", "it", "cloud", "secur", "data", "admin")):
+            has_tech_cert = 1.0
+
+    # Assessment & topic scores
+    if latest_score is not None:
+        app_assessment_score = float(latest_score)
+    elif strict:
+        if topic_scores:
+            app_assessment_score = float(sum(float(v) for v in topic_scores.values()) / len(topic_scores))
+        else:
+            app_assessment_score = float(task_min_assessment)
+    else:
+        app_assessment_score = 75.0
+
+    app_comm_score = float(topic_scores.get(3, topic_scores.get("communication_score", app_assessment_score)))
+    app_prod_score = float(topic_scores.get(1, topic_scores.get("product_knowledge_score", app_assessment_score)))
+    app_sales_score = float(topic_scores.get(2, topic_scores.get("sales_skill_score", app_assessment_score)))
+    app_cs_score = float(topic_scores.get(4, topic_scores.get("customer_service_score", app_assessment_score)))
+
+    raw_context = {
+        "task_category": task_category,
+        "difficulty_tier": diff_tier,
+        "task_min_exp": task_min_exp,
+        "task_min_assessment": task_min_assessment,
+        "task_min_comm": 70.0,
+        "task_min_prod": 70.0,
+        "task_min_sales": 70.0,
+        "task_min_cs": 70.0,
+        "applicant_relevant_exp": app_rel_exp,
+        "applicant_sales_exp": app_sales_exp,
+        "applicant_cs_exp": app_cs_exp,
+        "applicant_cert_count": app_cert_count,
+        "applicant_has_sales_cert": has_sales_cert,
+        "applicant_has_cs_cert": has_cs_cert,
+        "applicant_has_tech_cert": has_tech_cert,
+        "applicant_assessment_score": app_assessment_score,
+        "applicant_comm_score": app_comm_score,
+        "applicant_prod_score": app_prod_score,
+        "applicant_sales_score": app_sales_score,
+        "applicant_cs_score": app_cs_score,
+    }
+
+    return build_complete_stage2_feature_dict(raw_context)
+
+
+def get_task_applicants(task_id):
+    """
+    Retrieve all applicants for a given task, including full agent profile,
+    contact info, verification status, experience, certifications, topic results,
+    Stage 1 deterministic eligibility status, and Stage 2 advisory task suitability score
+    (computed strictly for Stage 1-eligible candidates).
+    """
+    conn = get_mysql_connection()
+    if not conn:
+        return []
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT t.task_id, t.task_name, t.status, t.positions_count,
+                       c.category_name, tr.minimum_competency, tr.minimum_experience_months,
+                       tr.required_certification_id, tr.exam_required, t.exam_id
+                FROM tasks t
+                JOIN categories c ON t.category_id = c.category_id
+                LEFT JOIN task_requirements tr ON t.task_id = tr.task_id
+                WHERE t.task_id = %s
+            """, (task_id,))
+            task = cursor.fetchone()
+            if not task:
+                return []
+
+            cursor.execute("""
+                SELECT 
+                    ta.application_id,
+                    ta.task_id,
+                    ta.agent_id,
+                    ta.status,
+                    ta.applied_at,
+                    ta.updated_at,
+                    ta.notes,
+                    u.user_id,
+                    u.full_name,
+                    u.email,
+                    a.phone,
+                    a.experience_months,
+                    a.status AS agent_status
+                FROM task_applications ta
+                JOIN agents a ON ta.agent_id = a.agent_id
+                JOIN users u ON a.user_id = u.user_id
+                WHERE ta.task_id = %s
+                ORDER BY ta.applied_at DESC
+            """, (task_id,))
+            applicants = cursor.fetchall()
+
+            from src.task_suitability_inference import task_suitability_engine
+            traceability_meta = task_suitability_engine.get_traceability_metadata()
+            default_threshold = float(traceability_meta.get("applied_threshold", 0.60))
+            synthetic_disclaimer = traceability_meta.get("synthetic_data_disclaimer", "")
+
+            results = []
+            for app in applicants:
+                user_id = app["user_id"]
+                agent_id = app["agent_id"]
+
+                cursor.execute("""
+                    SELECT predicted_competency, confidence, predicted_at
+                    FROM ml_predictions
+                    WHERE agent_id = %s
+                    ORDER BY prediction_id DESC LIMIT 1
+                """, (agent_id,))
+                pred = cursor.fetchone()
+
+                cursor.execute("""
+                    SELECT c.certification_id, c.certification_name, ac.status, ac.expiry_date
+                    FROM agent_certifications ac
+                    JOIN certifications c ON ac.certification_id = c.certification_id
+                    WHERE ac.agent_id = %s AND ac.status IN ('ACTIVE', 'VERIFIED')
+                """, (agent_id,))
+                certs = cursor.fetchall()
+
+                latest_score = None
+                assessment_passed = False
+                if task.get("exam_id"):
+                    cursor.execute("""
+                        SELECT assessment_score, passed, completed_at
+                        FROM exam_results
+                        WHERE agent_id = %s AND exam_id = %s
+                        ORDER BY exam_result_id DESC LIMIT 1
+                    """, (agent_id, task["exam_id"]))
+                    er = cursor.fetchone()
+                    if er:
+                        latest_score = float(er["assessment_score"]) if er["assessment_score"] is not None else None
+                        assessment_passed = bool(er["passed"])
+                else:
+                    cursor.execute("""
+                        SELECT atr.score, atr.passed, atr.completed_at
+                        FROM agent_topic_results atr
+                        WHERE atr.agent_id = %s
+                        ORDER BY atr.result_id DESC LIMIT 1
+                    """, (agent_id,))
+                    atr = cursor.fetchone()
+                    if atr:
+                        latest_score = float(atr["score"]) if atr["score"] is not None else None
+                        assessment_passed = bool(atr["passed"])
+
+                # Query topic subscores for applicant if available
+                cursor.execute("""
+                    SELECT atr.topic_id, atr.score
+                    FROM agent_topic_results atr
+                    INNER JOIN (
+                        SELECT topic_id, MAX(result_id) as max_id
+                        FROM agent_topic_results
+                        WHERE agent_id = %s
+                        GROUP BY topic_id
+                    ) latest ON atr.result_id = latest.max_id
+                """, (agent_id,))
+                topic_scores = {r["topic_id"]: float(r["score"]) for r in cursor.fetchall()}
+
+                req_cert_id = task.get("required_certification_id")
+                has_cert = True
+                if req_cert_id:
+                    has_cert = any(c["certification_id"] == req_cert_id for c in certs)
+
+                min_exp = int(task.get("minimum_experience_months") or 0)
+                agent_exp = int(app.get("experience_months") or 0)
+                meets_exp = agent_exp >= min_exp
+
+                # Stage 1 Deterministic prerequisite evaluation (Authoritative Gatekeeper)
+                pred_comp = pred["predicted_competency"] if pred else "Unassessed"
+                meets_comp = True
+                exam_req = bool(task.get("exam_required"))
+                has_assessment = assessment_passed if exam_req else True
+                is_active_agent = app.get("agent_status", "ACTIVE") == "ACTIVE"
+                meets_all = bool(has_cert and meets_exp and has_assessment and is_active_agent)
+
+                # Stage 2 Advisory Suitability Inference:
+                # ONLY evaluate candidates who pass the Stage 1 deterministic gatekeeper.
+                suitability_info = None
+                stage2_status = "ineligible_not_scored"
+                suitability_error = None
+
+                if meets_all:
+                    try:
+                        feat_dict = build_task_suitability_features(
+                            agent_data=app,
+                            task_data=task,
+                            certs=certs,
+                            topic_scores=topic_scores,
+                            latest_score=latest_score,
+                            strict=True,
+                        )
+                        feat_dict["is_eligible"] = True
+                        feat_dict["meets_prerequisites"] = True
+                        suitability_info = task_suitability_engine.predict(feat_dict)
+                        stage2_status = "scored"
+                    except Exception as ex:
+                        stage2_status = "error"
+                        suitability_error = str(ex)
+                        logger.warning(
+                            f"Could not compute Stage 2 task suitability for eligible agent {agent_id} on task {task_id}: {ex}"
+                        )
+
+                if meets_all and suitability_info:
+                    suitability_score = suitability_info.get("suitability_score")
+                    suitability_percent = suitability_info.get("suitability_percent")
+                    suitability_label = suitability_info.get("suitability_label")
+                    advisory_tier = suitability_info.get("advisory_tier")
+                    advisory_tier_code = suitability_info.get("advisory_tier_code")
+                    suitability_class = suitability_info.get("predicted_class")
+                    applied_threshold = suitability_info.get("applied_threshold", default_threshold)
+                    engineered_features = suitability_info.get("engineered_features")
+                    contributing_factors = suitability_info.get("contributing_factors", [])
+                    model_trace = suitability_info.get("model_traceability", traceability_meta)
+                elif not meets_all:
+                    suitability_score = None
+                    suitability_percent = None
+                    suitability_label = "Ineligible — Stage 1 Gate Failed"
+                    advisory_tier = "Ineligible — Stage 1 Gate Failed"
+                    advisory_tier_code = "ineligible"
+                    suitability_class = None
+                    applied_threshold = default_threshold
+                    engineered_features = None
+                    contributing_factors = []
+                    model_trace = traceability_meta
+                else:
+                    suitability_score = None
+                    suitability_percent = None
+                    suitability_label = "Score Unavailable"
+                    advisory_tier = "Score Unavailable"
+                    advisory_tier_code = "unavailable"
+                    suitability_class = None
+                    applied_threshold = default_threshold
+                    engineered_features = None
+                    contributing_factors = []
+                    model_trace = traceability_meta
+
+                results.append({
+                    "application_id": app["application_id"],
+                    "task_id": app["task_id"],
+                    "agent_id": app["agent_id"],
+                    "user_id": app["user_id"],
+                    "full_name": app["full_name"],
+                    "email": app["email"],
+                    "phone": app["phone"],
+                    "status": app["status"],
+                    "applied_at": app["applied_at"].isoformat() if hasattr(app["applied_at"], "isoformat") else str(app["applied_at"]),
+                    "updated_at": app["updated_at"].isoformat() if hasattr(app["updated_at"], "isoformat") else str(app["updated_at"]),
+                    "notes": app["notes"],
+                    "experience_months": agent_exp,
+                    "certifications": [serialize_sql_row(c) for c in certs],
+                    "predicted_competency": pred_comp if pred else "Unassessed",
+                    "confidence": float(pred["confidence"]) if pred and pred.get("confidence") is not None else None,
+                    "latest_score": latest_score,
+                    "assessment_passed": assessment_passed,
+                    "meets_prerequisites": meets_all,
+                    "prerequisites": {
+                        "cert_met": has_cert,
+                        "exp_met": meets_exp,
+                        "comp_met": meets_comp,
+                        "assessment_met": has_assessment
+                    },
+                    "stage2_status": stage2_status,
+                    "suitability_score": suitability_score,
+                    "suitability_percent": suitability_percent,
+                    "suitability_label": suitability_label,
+                    "advisory_tier": advisory_tier,
+                    "advisory_tier_code": advisory_tier_code,
+                    "suitability_class": suitability_class,
+                    "applied_threshold": applied_threshold,
+                    "engineered_features": engineered_features,
+                    "contributing_factors": contributing_factors,
+                    "model_traceability": model_trace,
+                    "eligible_rank": None,
+                    "suitability_error": suitability_error,
+                    "is_advisory": True,
+                    "synthetic_data_disclaimer": synthetic_disclaimer,
+                    "suitability_disclaimer": (
+                        "Advisory Task Suitability Score (Stage 2 LR v2, tau=0.60): "
+                        "Administrator retains final assignment authority. "
+                        "Trained on synthetic simulation data (Scenario B); not yet validated on real-world outcomes."
+                    ),
+                })
+
+            # Compute 1-based advisory ranking strictly among Stage 1-eligible scored candidates
+            eligible_scored = [
+                r for r in results
+                if r.get("meets_prerequisites") and r.get("suitability_score") is not None
+            ]
+            eligible_scored.sort(
+                key=lambda r: (
+                    float(r.get("suitability_score") or 0.0),
+                    float(r.get("latest_score") or 0.0),
+                    int(r.get("experience_months") or 0),
+                    -int(r.get("application_id") or 0),
+                ),
+                reverse=True,
+            )
+            for idx, item in enumerate(eligible_scored, start=1):
+                item["eligible_rank"] = idx
+
+            return results
+    except Exception as e:
+        logger.error(f"Error fetching task applicants for task {task_id}: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+APPLICATION_STATUS_TRANSITIONS = {
+    "Application Submitted": ("Under Review", "Shortlisted", "Rejected"),
+    "Under Review": ("Shortlisted", "Rejected"),
+    "Shortlisted": ("Under Review", "Rejected"),
+    # Terminal states: no further administrative status change through the generic route.
+    "Assigned": (),
+    "Rejected": (),
+    "Withdrawn": (),
+}
+
+
+def update_task_application_status(application_id, status, notes=None, admin_user_id=None):
+    """
+    Update application lifecycle status with audit logging.
+
+    Administrative review transitions only (Under Review, Shortlisted, Rejected).
+    Assignment must go through assign_task_application, which rechecks eligibility.
+    Terminal applications (Assigned, Rejected, Withdrawn) cannot be changed here.
+    """
+    if status == "Assigned":
+        raise ValueError("Applications can only be assigned through the assignment action, which rechecks eligibility.")
+    if status == "Withdrawn":
+        raise ValueError("Withdrawal is an agent action and cannot be set through the administrator review route.")
+    valid_statuses = ("Under Review", "Shortlisted", "Rejected")
+    if status not in valid_statuses:
+        raise ValueError(f"Invalid application status: '{status}'. Allowed statuses: {', '.join(valid_statuses)}")
+
+    conn = get_mysql_connection()
+    if not conn:
+        raise RuntimeError("Database unavailable.")
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT application_id, task_id, agent_id, status FROM task_applications WHERE application_id = %s FOR UPDATE", (application_id,))
+            app = cursor.fetchone()
+            if not app:
+                raise ValueError(f"Application {application_id} not found.")
+
+            allowed_next = APPLICATION_STATUS_TRANSITIONS.get(app["status"], ())
+            if status not in allowed_next:
+                raise ValueError(
+                    f"Cannot change application from '{app['status']}' to '{status}'."
+                )
+
+            cursor.execute("""
+                UPDATE task_applications
+                SET status = %s,
+                    notes = COALESCE(%s, notes),
+                    updated_at = NOW()
+                WHERE application_id = %s
+            """, (status, notes, application_id))
+
+            cursor.execute("""
+                INSERT INTO audit_logs (user_id, action, entity_type, entity_id, description, created_at)
+                VALUES (%s, 'TASK_APPLICATION_STATUS_UPDATED', 'task_applications', %s, %s, NOW())
+            """, (admin_user_id or 1, application_id, json.dumps({
+                "application_id": application_id,
+                "previous_status": app["status"],
+                "new_status": status,
+                "notes": notes
+            })))
+
+        conn.commit()
+        return {"application_id": application_id, "status": status, "notes": notes}
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error updating task application {application_id}: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def assign_task_application(application_id, admin_user_id):
+    """
+    Assign an application to a task.
+    Authoritatively re-evaluates all server-side prerequisites.
+    Updates application status to 'Assigned' and task status to 'COMPLETED'.
+    Inserts audit log event 'TASK_APPLICATION_ASSIGNED'.
+    """
+    conn = get_mysql_connection()
+    if not conn:
+        raise RuntimeError("Database unavailable.")
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT ta.application_id, ta.task_id, ta.agent_id, ta.status AS app_status,
+                       t.task_name, t.status AS task_status, t.positions_count,
+                       u.user_id, u.full_name, a.experience_months
+                FROM task_applications ta
+                JOIN tasks t ON ta.task_id = t.task_id
+                JOIN agents a ON ta.agent_id = a.agent_id
+                JOIN users u ON a.user_id = u.user_id
+                WHERE ta.application_id = %s
+            """, (application_id,))
+            app_row = cursor.fetchone()
+            if not app_row:
+                raise ValueError(f"Application {application_id} not found.")
+
+            if app_row["task_status"] != "ACTIVE":
+                raise ValueError(f"Cannot assign task: Task is currently in '{app_row['task_status']}' status.")
+
+            if app_row["app_status"] not in ("Application Submitted", "Under Review", "Shortlisted"):
+                raise ValueError(f"Cannot assign: application is '{app_row['app_status']}' and is not assignable.")
+
+            task_id = app_row["task_id"]
+            agent_id = app_row["agent_id"]
+
+            cursor.execute("""
+                SELECT minimum_competency, required_certification_id, minimum_experience_months, exam_required
+                FROM task_requirements WHERE task_id = %s
+            """, (task_id,))
+            req = cursor.fetchone()
+
+            if req:
+                req_cert_id = req["required_certification_id"]
+                if req_cert_id:
+                    cursor.execute("""
+                        SELECT certification_id FROM agent_certifications
+                        WHERE agent_id = %s AND certification_id = %s AND status IN ('ACTIVE', 'VERIFIED')
+                    """, (agent_id, req_cert_id))
+                    if not cursor.fetchone():
+                        raise ValueError("Cannot assign task: Applicant lacks required verified certification.")
+
+                min_exp = int(req["minimum_experience_months"] or 0)
+                agent_exp = int(app_row["experience_months"] or 0)
+                if agent_exp < min_exp:
+                    raise ValueError(f"Cannot assign task: Applicant has {agent_exp} months experience; task requires {min_exp} months.")
+
+                if bool(req["exam_required"]):
+                    cursor.execute("""
+                        SELECT t.exam_id FROM tasks t WHERE t.task_id = %s
+                    """, (task_id,))
+                    t_exam = cursor.fetchone()
+                    exam_id = t_exam["exam_id"] if t_exam else None
+                    passed_assessment = False
+                    if exam_id:
+                        cursor.execute("""
+                            SELECT passed FROM exam_results
+                            WHERE agent_id = %s AND exam_id = %s
+                            ORDER BY exam_result_id DESC LIMIT 1
+                        """, (agent_id, exam_id))
+                        er = cursor.fetchone()
+                        passed_assessment = bool(er and er["passed"])
+                    else:
+                        cursor.execute("""
+                            SELECT passed FROM agent_topic_results
+                            WHERE agent_id = %s
+                            ORDER BY result_id DESC LIMIT 1
+                        """, (agent_id,))
+                        atr = cursor.fetchone()
+                        passed_assessment = bool(atr and atr["passed"])
+
+                    if not passed_assessment:
+                        raise ValueError("Cannot assign task: Applicant has not passed the required competency assessment.")
+
+            cursor.execute("""
+                UPDATE task_applications
+                SET status = 'Assigned', updated_at = NOW()
+                WHERE application_id = %s
+            """, (application_id,))
+
+            cursor.execute("""
+                UPDATE tasks
+                SET status = 'COMPLETED', updated_at = NOW()
+                WHERE task_id = %s
+            """, (task_id,))
+
+            cursor.execute("""
+                INSERT INTO audit_logs (user_id, action, entity_type, entity_id, description, created_at)
+                VALUES (%s, 'TASK_APPLICATION_ASSIGNED', 'task_applications', %s, %s, NOW())
+            """, (admin_user_id, application_id, json.dumps({
+                "application_id": application_id,
+                "task_id": task_id,
+                "task_name": app_row["task_name"],
+                "assigned_agent_id": agent_id,
+                "assigned_agent_name": app_row["full_name"],
+                "status": "Assigned"
+            })))
+
+        conn.commit()
+        return {
+            "application_id": application_id,
+            "task_id": task_id,
+            "agent_id": agent_id,
+            "status": "Assigned",
+            "task_status": "COMPLETED"
+        }
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error assigning task application {application_id}: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def get_agent_applications(user_id):
+    """
+    Retrieve all task applications submitted by an agent with live statuses,
+    task details, deliverables, payout, and assignment outcome.
+    """
+    conn = get_mysql_connection()
+    if not conn:
+        return []
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT agent_id FROM agents WHERE user_id = %s LIMIT 1", (user_id,))
+            agent_row = cursor.fetchone()
+            if not agent_row:
+                return []
+            agent_id = agent_row["agent_id"]
+
+            cursor.execute("""
+                SELECT 
+                    ta.application_id,
+                    ta.task_id,
+                    ta.status,
+                    ta.applied_at,
+                    ta.updated_at,
+                    ta.notes,
+                    t.task_name,
+                    t.description AS task_description,
+                    t.status AS task_status,
+                    t.work_arrangement,
+                    t.location,
+                    t.payment_type,
+                    t.currency,
+                    t.hourly_rate_min,
+                    t.hourly_rate_max,
+                    t.fixed_budget,
+                    t.expected_duration,
+                    c.category_name
+                FROM task_applications ta
+                JOIN tasks t ON ta.task_id = t.task_id
+                JOIN categories c ON t.category_id = c.category_id
+                WHERE ta.agent_id = %s
+                ORDER BY ta.applied_at DESC
+            """, (agent_id,))
+            rows = cursor.fetchall()
+
+            results = []
+            for r in rows:
+                pay_type = r.get("payment_type") or "Fixed Budget"
+                curr = r.get("currency") or "KES"
+                h_min = r.get("hourly_rate_min")
+                h_max = r.get("hourly_rate_max")
+                f_bud = r.get("fixed_budget")
+
+                if pay_type == "Hourly" and h_min is not None:
+                    if h_max and float(h_max) > float(h_min):
+                        payout_str = f"{curr} {float(h_min):,.0f} - {float(h_max):,.0f} / hr"
+                    else:
+                        payout_str = f"{curr} {float(h_min):,.0f} / hr"
+                elif f_bud is not None:
+                    payout_str = f"{curr} {float(f_bud):,.0f} (Fixed)"
+                else:
+                    payout_str = "Negotiable"
+
+                results.append({
+                    "application_id": r["application_id"],
+                    "task_id": r["task_id"],
+                    "task_name": r["task_name"],
+                    "category_name": r["category_name"],
+                    "status": r["status"],
+                    "task_status": r["task_status"],
+                    "work_arrangement": r["work_arrangement"],
+                    "location": r["location"],
+                    "expected_duration": r["expected_duration"],
+                    "payout": payout_str,
+                    "applied_at": r["applied_at"].isoformat() if hasattr(r["applied_at"], "isoformat") else str(r["applied_at"]),
+                    "updated_at": r["updated_at"].isoformat() if hasattr(r["updated_at"], "isoformat") else str(r["updated_at"]),
+                    "notes": r["notes"]
+                })
+            return results
+    except Exception as e:
+        logger.error(f"Error fetching agent applications for user {user_id}: {e}")
+        return []
+    finally:
+        conn.close()
+
+
 def get_admin_assessments():
     """Retrieve all historical competency assessments across all agents."""
     conn = get_mysql_connection()
@@ -2556,6 +3457,9 @@ def get_admin_assessments():
                 SELECT 
                     er.exam_result_id,
                     er.exam_id,
+                    ex.exam_name,
+                    ex.passing_score,
+                    c.category_name,
                     er.agent_id,
                     u.full_name AS agent_name,
                     u.email AS agent_email,
@@ -2571,6 +3475,8 @@ def get_admin_assessments():
                 FROM exam_results er
                 JOIN agents a ON er.agent_id = a.agent_id
                 JOIN users u ON a.user_id = u.user_id
+                LEFT JOIN exams ex ON er.exam_id = ex.exam_id
+                LEFT JOIN categories c ON ex.category_id = c.category_id
                 LEFT JOIN ml_predictions mp ON er.exam_result_id = mp.exam_result_id
                 LEFT JOIN audit_logs al ON (al.entity_type = 'ml_predictions' AND al.entity_id = mp.prediction_id AND al.action = 'ASSESSMENT_COMPLETED')
                 ORDER BY er.completed_at DESC, er.exam_result_id DESC
@@ -2717,6 +3623,56 @@ def get_admin_review_detail(evaluation_id):
         conn.close()
 
 
+def update_admin_review_decision(evaluation_id, decision, reviewer_id, comments=""):
+    """Update review_status ('APPROVED'|'REJECTED') and eligibility_status for an evaluation."""
+    conn = get_mysql_connection()
+    if not conn:
+        return False, "Database connection unavailable."
+
+    valid_decisions = {"APPROVED", "REJECTED"}
+    if decision not in valid_decisions:
+        return False, f"Invalid decision '{decision}'. Expected APPROVED or REJECTED."
+
+    new_eligibility = "ELIGIBLE" if decision == "APPROVED" else "NOT_ELIGIBLE"
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                UPDATE eligibility_evaluations
+                SET 
+                    review_status = %s,
+                    eligibility_status = %s,
+                    reviewer_id = %s,
+                    review_comments = %s,
+                    reviewed_at = CURRENT_TIMESTAMP
+                WHERE evaluation_id = %s
+            """, (decision, new_eligibility, reviewer_id, comments, evaluation_id))
+            conn.commit()
+
+            # Record audit log
+            try:
+                log_audit_event(
+                    user_id=reviewer_id,
+                    action=f"ELIGIBILITY_REVIEW_{decision}",
+                    entity_type="eligibility_evaluations",
+                    entity_id=evaluation_id,
+                    details={
+                        "decision": decision,
+                        "new_eligibility": new_eligibility,
+                        "comments": comments
+                    }
+                )
+            except Exception as log_err:
+                logger.warning(f"Failed to log audit event: {log_err}")
+
+            return True, f"Review decision '{decision}' recorded successfully."
+    except Exception as e:
+        logger.error(f"Error updating review decision: {e}")
+        return False, str(e)
+    finally:
+        conn.close()
+
+
 # =====================================================================
 # AGENT PROFILE, EXPERIENCE, AND CERTIFICATION WORKFLOWS
 # =====================================================================
@@ -2802,12 +3758,14 @@ def calculate_agent_verified_experience(agent_id, cursor=None):
             WHERE agent_id = %s
         """, (total_months, agent_id))
 
+        other_months = max(0, total_months - (sales_months + cs_months))
+
         return {
             "previous_experience_months": total_months,
             "total_experience_months": total_months,
             "sales_experience_months": sales_months,
             "customer_service_experience_months": cs_months,
-            "other_experience_months": max(0, total_months - (sales_months + cs_months)),
+            "other_experience_months": other_months,
             "verified_entries_count": len(rows)
         }
 
@@ -2990,15 +3948,17 @@ def update_agent_profile(user_id, data):
             phone = data.get("phone")
             location = data.get("location")
             bio = data.get("bio")
+            education = data.get("education")
 
             cur.execute("""
                 UPDATE agents 
-                SET phone = %s, location = %s, bio = %s, updated_at = NOW()
+                SET phone = %s, location = %s, bio = %s, education = %s, updated_at = NOW()
                 WHERE agent_id = %s
             """, (
                 str(phone).strip() if phone else None,
                 str(location).strip() if location else None,
                 str(bio).strip() if bio else None,
+                str(education).strip() if education else None,
                 agent_id
             ))
 
@@ -3026,7 +3986,9 @@ def get_agent_experiences(user_id):
             cur.execute("""
                 SELECT ae.experience_id, ae.agent_id, ae.job_title, ae.company, ae.work_category,
                        ae.description, ae.start_date, ae.end_date, ae.is_current,
+                       ae.supervisor_name, ae.supervisor_email, ae.supervisor_phone,
                        ae.verification_status, ae.rejection_reason, ae.reviewed_at, ae.created_at,
+                       ae.verification_token, ae.token_expires_at, ae.verified_via, ae.supervisor_feedback,
                        rev.full_name AS reviewer_name
                 FROM agent_experience ae
                 JOIN agents a ON ae.agent_id = a.agent_id
@@ -3034,7 +3996,12 @@ def get_agent_experiences(user_id):
                 WHERE a.user_id = %s
                 ORDER BY ae.is_current DESC, ae.end_date DESC, ae.start_date DESC
             """, (user_id,))
-            return [serialize_sql_row(r) for r in cur.fetchall()]
+            rows = []
+            for r in cur.fetchall():
+                row = serialize_sql_row(r)
+                row["status"] = row.get("verification_status")
+                rows.append(row)
+            return rows
     finally:
         conn.close()
 
@@ -3047,6 +4014,11 @@ def create_agent_experience(user_id, exp_data):
     end_date = exp_data.get("end_date")
     is_current = bool(exp_data.get("is_current", False))
     description = exp_data.get("description", "").strip()
+
+    # Supervisor / Manager reference inputs
+    supervisor_name = str(exp_data.get("supervisor_name", "")).strip() or None
+    supervisor_email = str(exp_data.get("supervisor_email", "")).strip() or None
+    supervisor_phone = str(exp_data.get("supervisor_phone", "")).strip() or None
 
     if len(job_title) < 2:
         raise ValueError("Job title is required (minimum 2 characters)")
@@ -3065,44 +4037,79 @@ def create_agent_experience(user_id, exp_data):
     if not is_current and end_date:
         try:
             e_date = datetime.strptime(str(end_date), "%Y-%m-%d").date()
-            if s_date > e_date:
-                raise ValueError("End date must be on or after start date")
         except ValueError:
             raise ValueError("End date must be in YYYY-MM-DD format")
+        if s_date > e_date:
+            raise ValueError("End date must be on or after start date")
     elif is_current:
         end_date = None
+        e_date = None
+
+    # Enforce mandatory former supervisor/manager reference
+    if not supervisor_name or len(supervisor_name) < 2:
+        raise ValueError("Supervisor / Manager name is mandatory for employment verification (minimum 2 characters)")
+    if not supervisor_email or "@" not in supervisor_email or "." not in supervisor_email:
+        raise ValueError("Supervisor corporate email is mandatory and must be a valid email address")
+
+    # Generate verification token and 7-day expiration
+    verification_token = secrets.token_urlsafe(32)
+    token_expires_at = datetime.now() + timedelta(days=7)
 
     conn = get_mysql_connection()
     if not conn:
         raise RuntimeError("Database unavailable")
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT agent_id FROM agents WHERE user_id = %s", (user_id,))
+            cur.execute("""
+                SELECT a.agent_id, u.full_name AS agent_name, u.email AS agent_email
+                FROM agents a
+                JOIN users u ON a.user_id = u.user_id
+                WHERE a.user_id = %s
+            """, (user_id,))
             ag = cur.fetchone()
             if not ag:
                 raise ValueError("Agent profile not found")
             agent_id = ag["agent_id"]
+            agent_name = ag["agent_name"]
 
             cur.execute("""
                 INSERT INTO agent_experience
-                (agent_id, job_title, company, work_category, description, start_date, end_date, is_current, verification_status, created_at)
+                (agent_id, job_title, company, work_category, description,
+                 supervisor_name, supervisor_email, supervisor_phone,
+                 start_date, end_date, is_current,
+                 verification_status, verification_token, token_expires_at, created_at)
                 VALUES
-                (%s, %s, %s, %s, %s, %s, %s, %s, 'PENDING', NOW())
-            """, (agent_id, job_title, company, work_category, description, start_date, end_date, 1 if is_current else 0))
+                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PENDING', %s, %s, NOW())
+            """, (
+                agent_id, job_title, company, work_category, description,
+                supervisor_name, supervisor_email, supervisor_phone,
+                start_date, end_date, 1 if is_current else 0,
+                verification_token, token_expires_at
+            ))
             exp_id = cur.lastrowid
 
             cur.execute("""
                 INSERT INTO audit_logs (user_id, action, entity_type, entity_id, description, created_at)
-                VALUES (%s, 'EXPERIENCE_SUBMITTED', 'agent_experience', %s, 'Submitted work experience for verification', NOW())
+                VALUES (%s, 'EXPERIENCE_SUBMITTED', 'agent_experience', %s, 'Submitted work experience with supervisor reference for verification', NOW())
             """, (user_id, exp_id))
 
             conn.commit()
-            return {"experience_id": exp_id, "verification_status": "PENDING"}
+
+            return {
+                "experience_id": exp_id,
+                "verification_status": "PENDING",
+                "verification_token": verification_token,
+                "verification_link": f"http://localhost:5173/verify-experience?token={verification_token}",
+                "supervisor_name": supervisor_name,
+                "supervisor_email": supervisor_email,
+                "supervisor_phone": supervisor_phone
+            }
     except Exception as e:
         conn.rollback()
         raise
     finally:
         conn.close()
+
 
 
 def delete_agent_experience(user_id, experience_id):
@@ -3140,6 +4147,7 @@ def get_agent_certifications_list(user_id):
             cur.execute("""
                 SELECT 
                     ac.agent_certification_id,
+                    ac.agent_certification_id AS agent_cert_id,
                     ac.agent_id,
                     ac.certification_id,
                     COALESCE(c.certification_name, ac.issuing_organization, 'Professional Certification') AS certification_name,
@@ -3162,7 +4170,12 @@ def get_agent_certifications_list(user_id):
                 WHERE a.user_id = %s
                 ORDER BY ac.created_at DESC
             """, (user_id,))
-            return [serialize_sql_row(r) for r in cur.fetchall()]
+            rows = []
+            for r in cur.fetchall():
+                row = serialize_sql_row(r)
+                row["status"] = row.get("verification_status")
+                rows.append(row)
+            return rows
     finally:
         conn.close()
 
@@ -3316,11 +4329,18 @@ def get_admin_pending_verifications():
                     ae.company,
                     ae.work_category,
                     ae.description,
+                    ae.supervisor_name,
+                    ae.supervisor_email,
+                    ae.supervisor_phone,
                     ae.start_date,
                     ae.end_date,
                     ae.is_current,
                     ae.verification_status,
                     ae.rejection_reason,
+                    ae.verification_token,
+                    ae.token_expires_at,
+                    ae.verified_via,
+                    ae.supervisor_feedback,
                     ae.created_at AS submitted_at
                 FROM agent_experience ae
                 JOIN agents a ON ae.agent_id = a.agent_id
@@ -3413,6 +4433,7 @@ def review_agent_experience(admin_user_id, exp_id, decision, rejection_reason=No
             cur.execute("""
                 UPDATE agent_experience
                 SET verification_status = %s,
+                    verified_via = 'ADMIN',
                     rejection_reason = %s,
                     reviewed_by = %s,
                     reviewed_at = NOW(),
@@ -3425,12 +4446,185 @@ def review_agent_experience(admin_user_id, exp_id, decision, rejection_reason=No
             cur.execute("""
                 INSERT INTO audit_logs (user_id, action, entity_type, entity_id, description, created_at)
                 VALUES (%s, %s, 'agent_experience', %s, %s, NOW())
-            """, (admin_user_id, f"EXPERIENCE_{decision}", exp_id, f"Admin marked experience as {decision}. Recalculated verified months: {calc['previous_experience_months']}"))
+            """, (admin_user_id, f"EXPERIENCE_{decision}", exp_id, f"Admin marked experience as {decision}. Recalculated verified months: {calc['total_experience_months']}"))
 
             conn.commit()
-            return {"experience_id": exp_id, "verification_status": new_status, "recalculated_months": calc["previous_experience_months"]}
+            return {"experience_id": exp_id, "verification_status": new_status, "recalculated_months": calc["total_experience_months"]}
     except Exception as e:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+
+
+def get_experience_by_verification_token(token):
+    """Fetch public details of a work experience record for the supervisor verification screen."""
+    if not token or len(token) < 10:
+        return None, "Invalid verification token."
+    conn = get_mysql_connection()
+    if not conn:
+        return None, "Database service is temporarily unavailable."
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT ae.experience_id, ae.agent_id, u.full_name AS agent_name,
+                       ae.job_title, ae.company, ae.work_category, ae.description,
+                       ae.start_date, ae.end_date, ae.is_current,
+                       ae.supervisor_name, ae.supervisor_email, ae.supervisor_phone,
+                       ae.verification_status, ae.token_expires_at, ae.verified_via,
+                       ae.supervisor_feedback
+                FROM agent_experience ae
+                JOIN agents a ON ae.agent_id = a.agent_id
+                JOIN users u ON a.user_id = u.user_id
+                WHERE ae.verification_token = %s
+            """, (token,))
+            row = cur.fetchone()
+            if not row:
+                return None, "Verification record not found or link is invalid."
+
+            # Check expiration
+            if row.get("token_expires_at") and row["token_expires_at"] < datetime.now():
+                return None, "This verification link has expired (7-day validity period exceeded)."
+
+            return serialize_sql_row(row), None
+    finally:
+        conn.close()
+
+
+def submit_supervisor_experience_review(token, decision, feedback=None, answers=None):
+    """
+    Process the supervisor's 1-click confirmation or dispute.
+    decision: 'CONFIRM' or 'DISPUTE'
+    """
+    if decision not in ("CONFIRM", "DISPUTE"):
+        raise ValueError("Decision must be 'CONFIRM' or 'DISPUTE'")
+
+    conn = get_mysql_connection()
+    if not conn:
+        raise RuntimeError("Database unavailable")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT ae.experience_id, ae.agent_id, ae.verification_status, ae.token_expires_at,
+                       u.full_name AS agent_name, ae.job_title, ae.company
+                FROM agent_experience ae
+                JOIN agents a ON ae.agent_id = a.agent_id
+                JOIN users u ON a.user_id = u.user_id
+                WHERE ae.verification_token = %s
+            """, (token,))
+            row = cur.fetchone()
+            if not row:
+                raise ValueError("Verification link is invalid or record does not exist.")
+
+            if row["verification_status"] != "PENDING":
+                raise ValueError(f"This experience record has already been reviewed (Current status: {row['verification_status']}).")
+
+            if row.get("token_expires_at") and row["token_expires_at"] < datetime.now():
+                raise ValueError("This verification link has expired.")
+
+            exp_id = row["experience_id"]
+            agent_id = row["agent_id"]
+            agent_name = row["agent_name"]
+
+            new_status = "VERIFIED" if decision == "CONFIRM" else "REJECTED"
+            rej_reason = feedback if decision == "DISPUTE" else None
+
+            cur.execute("""
+                UPDATE agent_experience
+                SET verification_status = %s,
+                    verified_via = 'SUPERVISOR_REFERENCE',
+                    supervisor_feedback = %s,
+                    rejection_reason = %s,
+                    reviewed_at = NOW(),
+                    updated_at = NOW()
+                WHERE experience_id = %s
+            """, (new_status, feedback, rej_reason, exp_id))
+
+            recalculated_months = 0
+            if decision == "CONFIRM":
+                calc = calculate_agent_verified_experience(agent_id, cur)
+                recalculated_months = calc.get("total_experience_months", 0)
+
+            action = "EXPERIENCE_VERIFIED_BY_SUPERVISOR" if decision == "CONFIRM" else "EXPERIENCE_DISPUTED_BY_SUPERVISOR"
+            desc = (
+                f"Supervisor confirmed employment for {agent_name} at {row['company']}. Recalculated verified months: {recalculated_months}."
+                if decision == "CONFIRM"
+                else f"Supervisor disputed employment for {agent_name} at {row['company']}. Note: {feedback or 'None'}"
+            )
+            # Use user_id 1 (system/admin) for audit log
+            cur.execute("""
+                INSERT INTO audit_logs (user_id, action, entity_type, entity_id, description, created_at)
+                VALUES (1, %s, 'agent_experience', %s, %s, NOW())
+            """, (action, exp_id, desc))
+
+            conn.commit()
+            return {
+                "experience_id": exp_id,
+                "verification_status": new_status,
+                "recalculated_months": recalculated_months,
+                "agent_name": agent_name,
+                "decision": decision
+            }
+    except Exception as e:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def resend_supervisor_experience_email(experience_id, requester_user_id=None):
+    """Generate a refreshed token and resend verification email to the supervisor."""
+    conn = get_mysql_connection()
+    if not conn:
+        raise RuntimeError("Database unavailable")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT ae.experience_id, ae.supervisor_name, ae.supervisor_email,
+                       ae.job_title, ae.company, ae.start_date, ae.end_date, ae.is_current,
+                       ae.verification_status, u.full_name AS agent_name
+                FROM agent_experience ae
+                JOIN agents a ON ae.agent_id = a.agent_id
+                JOIN users u ON a.user_id = u.user_id
+                WHERE ae.experience_id = %s
+            """, (experience_id,))
+            row = cur.fetchone()
+            if not row:
+                raise ValueError("Experience record not found")
+
+            if row["verification_status"] != "PENDING":
+                raise ValueError(f"Cannot resend verification: record is already {row['verification_status']}.")
+
+            if not row.get("supervisor_email"):
+                raise ValueError("No supervisor email is associated with this experience entry.")
+
+            new_token = secrets.token_urlsafe(32)
+            new_expires = datetime.now() + timedelta(days=7)
+
+            cur.execute("""
+                UPDATE agent_experience
+                SET verification_token = %s, token_expires_at = %s, updated_at = NOW()
+                WHERE experience_id = %s
+            """, (new_token, new_expires, experience_id))
+            conn.commit()
+
+            verification_link = f"http://localhost:5173/verify-experience?token={new_token}"
+            from backend.email_service import send_supervisor_verification_email
+            email_sent = send_supervisor_verification_email(
+                supervisor_email=row["supervisor_email"],
+                supervisor_name=row.get("supervisor_name"),
+                agent_name=row["agent_name"],
+                company=row["company"],
+                job_title=row["job_title"],
+                start_date=str(row["start_date"]),
+                end_date_str="Present" if row["is_current"] else str(row["end_date"]),
+                verification_link=verification_link
+            )
+
+            return {
+                "experience_id": experience_id,
+                "verification_link": verification_link,
+                "email_dispatched": email_sent
+            }
     finally:
         conn.close()

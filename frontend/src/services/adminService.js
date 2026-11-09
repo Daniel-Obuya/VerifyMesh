@@ -18,6 +18,15 @@ export const adminService = {
   },
 
   /**
+   * Fetch full profile of an agent including verified experience, certs, and assessments
+   * @param {number|string} agentId
+   * @returns {Promise<Object>}
+   */
+  async getAgentProfile(agentId) {
+    return api.get(`/admin/agents/${agentId}/profile`);
+  },
+
+  /**
    * Fetch all tasks with category and configured eligibility requirements
    * @returns {Promise<Object>}
    */
@@ -106,6 +115,17 @@ export const adminService = {
   },
 
   /**
+   * Submit Workforce Officer decision (APPROVED|REJECTED) on an eligibility evaluation
+   * @param {number|string} evaluationId
+   * @param {'APPROVED'|'REJECTED'} decision
+   * @param {string} [comments]
+   * @returns {Promise<Object>}
+   */
+  async submitReviewAction(evaluationId, decision, comments = '') {
+    return api.post(`/admin/reviews/${evaluationId}/review`, { decision, comments });
+  },
+
+  /**
    * Fetch pending verification requests for agent certifications and work experience
    * @returns {Promise<Object>}
    */
@@ -138,6 +158,38 @@ export const adminService = {
     return api.post(`/admin/verifications/experiences/${expId}/review`, {
       decision,
       rejection_reason: rejectionReason,
+    });
+  },
+
+  /**
+   * Fetch applicants for a task with verified requirements fulfillment
+   * @param {number|string} taskId
+   * @returns {Promise<Object>}
+   */
+  async getTaskApplicants(taskId) {
+    return api.get(`/admin/tasks/${taskId}/applications`);
+  },
+
+  /**
+   * Assign an applicant to a task after verifying eligibility
+   * @param {number|string} applicationId
+   * @returns {Promise<Object>}
+   */
+  async assignTaskApplication(applicationId) {
+    return api.post(`/admin/applications/${applicationId}/assign`);
+  },
+
+  /**
+   * Update status of an application (e.g. Shortlisted, Rejected, Under Review)
+   * @param {number|string} applicationId
+   * @param {string} status
+   * @param {string} [notes]
+   * @returns {Promise<Object>}
+   */
+  async updateApplicationStatus(applicationId, status, notes) {
+    return api.post(`/admin/applications/${applicationId}/status`, {
+      status,
+      notes,
     });
   },
 };

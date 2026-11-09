@@ -1,0 +1,6 @@
+{
+    "threshold": 0.61,
+    "positive_class": 1,
+    "negative_class": 0,
+    "model_file": "verifymesh_final_optimized_pipeline.joblib"
+}

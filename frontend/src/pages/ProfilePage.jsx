@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   LayoutGrid, 
@@ -17,6 +17,8 @@ import {
   Save, 
   X, 
   ChevronDown, 
+  ChevronLeft,
+  ChevronRight,
   LogOut, 
   Bell, 
   Sparkles, 
@@ -27,17 +29,24 @@ import {
   MapPin, 
   Phone, 
   Mail, 
-  FileText,
-  Info,
-  Layers
+  UserCheck,
+  Send,
+  Camera,
+  Upload
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { competencyService } from '../services/competencyService';
-import { Button } from '../components/ui/Button';
 
 export const ProfilePage = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const fileInputRef = useRef(null);
+
+  // Sidebar collapse/expand state
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+  // Active Tab state: 'personal' | 'experience' | 'certifications'
+  const [activeTab, setActiveTab] = useState('personal');
 
   // Navigation & Dropdown states
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
@@ -50,12 +59,23 @@ export const ProfilePage = () => {
   const [errorMessage, setErrorMessage] = useState(null);
   const [successMessage, setSuccessMessage] = useState(null);
 
+  // Optional User Avatar (Stored per agent)
+  const avatarStorageKey = user?.id ? `verifymesh_agent_avatar_${user.id}` : 'verifymesh_agent_avatar';
+  const [avatarUrl, setAvatarUrl] = useState(() => {
+    try {
+      return localStorage.getItem(avatarStorageKey) || null;
+    } catch {
+      return null;
+    }
+  });
+
   // Edit Personal Info state
   const [isEditingPersonalInfo, setIsEditingPersonalInfo] = useState(false);
   const [personalForm, setPersonalForm] = useState({
     full_name: '',
     phone: '',
     location: '',
+    education: '',
     bio: ''
   });
   const [isSavingPersonal, setIsSavingPersonal] = useState(false);
@@ -70,7 +90,10 @@ export const ProfilePage = () => {
     start_date: '',
     end_date: '',
     is_current: false,
-    description: ''
+    description: '',
+    supervisor_name: '',
+    supervisor_email: '',
+    supervisor_phone: ''
   });
 
   // Add Certification Modal state
@@ -92,6 +115,7 @@ export const ProfilePage = () => {
     id: null,
     title: ''
   });
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Helper to show temporary alerts
   const showNotification = (msg, type = 'success') => {
@@ -104,7 +128,7 @@ export const ProfilePage = () => {
     }
   };
 
-  // Fetch all profile related data
+  // Fetch all profile related data from backend
   const loadProfileData = useCallback(async () => {
     setIsLoading(true);
     setErrorMessage(null);
@@ -121,8 +145,14 @@ export const ProfilePage = () => {
           full_name: profileRes.data.full_name || '',
           phone: profileRes.data.phone || '',
           location: profileRes.data.location || '',
+          education: profileRes.data.education || '',
           bio: profileRes.data.bio || ''
         });
+
+        // If backend provided an avatar, sync it
+        if (profileRes.data.avatar_url) {
+          setAvatarUrl(profileRes.data.avatar_url);
+        }
       }
 
       if (expRes?.data) {
@@ -148,6 +178,50 @@ export const ProfilePage = () => {
     navigate('/login');
   };
 
+  // Avatar Upload / Change Handler
+  const handleAvatarFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      showNotification('Please select a valid image file (JPG, PNG, WebP).', 'error');
+      return;
+    }
+
+    if (file.size > 2 * 1024 * 1024) {
+      showNotification('Profile image must be less than 2MB.', 'error');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64Data = event.target.result;
+      setAvatarUrl(base64Data);
+      try {
+        localStorage.setItem(avatarStorageKey, base64Data);
+      } catch {
+        // LocalStorage quota fallback
+      }
+      showNotification('Profile photo updated successfully.', 'success');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Avatar Removal Handler
+  const handleRemoveAvatar = (e) => {
+    e.stopPropagation();
+    setAvatarUrl(null);
+    try {
+      localStorage.removeItem(avatarStorageKey);
+    } catch {
+      // Ignore
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    showNotification('Profile photo removed. Standard initials avatar restored.', 'success');
+  };
+
   // Personal Info update handler
   const handleSavePersonal = async (e) => {
     e.preventDefault();
@@ -158,12 +232,18 @@ export const ProfilePage = () => {
 
     setIsSavingPersonal(true);
     try {
-      await competencyService.updateProfile(personalForm);
+      await competencyService.updateProfile({
+        full_name: personalForm.full_name,
+        phone: personalForm.phone,
+        location: personalForm.location,
+        education: personalForm.education,
+        bio: personalForm.bio
+      });
       showNotification('Personal details updated successfully.', 'success');
       setIsEditingPersonalInfo(false);
       await loadProfileData();
     } catch (err) {
-      showNotification(err?.response?.data?.error || 'Failed to update personal details.', 'error');
+      showNotification(err?.message || err?.data?.error || err?.response?.data?.error || 'Failed to update personal details.', 'error');
     } finally {
       setIsSavingPersonal(false);
     }
@@ -180,11 +260,20 @@ export const ProfilePage = () => {
       showNotification('Please provide an End Date or mark the role as Current.', 'error');
       return;
     }
+    if (!expForm.supervisor_name.trim() || !expForm.supervisor_email.trim()) {
+      showNotification('Supervisor / Manager Name and Corporate Email are mandatory for tenure verification.', 'error');
+      return;
+    }
 
     setIsSavingExp(true);
     try {
       await competencyService.addExperience(expForm);
-      showNotification('Work experience submitted for administrator verification.', 'success');
+      showNotification(
+        expForm.supervisor_email 
+          ? 'Work experience submitted! A 1-click verification email has been dispatched to your supervisor.'
+          : 'Work experience submitted for administrator verification.', 
+        'success'
+      );
       setIsAddExpOpen(false);
       setExpForm({
         job_title: '',
@@ -193,13 +282,26 @@ export const ProfilePage = () => {
         start_date: '',
         end_date: '',
         is_current: false,
-        description: ''
+        description: '',
+        supervisor_name: '',
+        supervisor_email: '',
+        supervisor_phone: ''
       });
       await loadProfileData();
     } catch (err) {
-      showNotification(err?.response?.data?.error || 'Failed to submit work experience.', 'error');
+      showNotification(err?.message || err?.data?.error || err?.response?.data?.error || 'Failed to submit work experience.', 'error');
     } finally {
       setIsSavingExp(false);
+    }
+  };
+
+  const handleResendSupervisor = async (expId) => {
+    try {
+      const res = await competencyService.resendSupervisorEmail(expId);
+      showNotification(res?.data?.message || 'Verification link resent to supervisor.', 'success');
+      await loadProfileData();
+    } catch (err) {
+      showNotification(err?.response?.data?.error || 'Failed to resend verification.', 'error');
     }
   };
 
@@ -226,7 +328,7 @@ export const ProfilePage = () => {
       });
       await loadProfileData();
     } catch (err) {
-      showNotification(err?.response?.data?.error || 'Failed to submit certification.', 'error');
+      showNotification(err?.message || err?.data?.error || err?.response?.data?.error || 'Failed to submit certification.', 'error');
     } finally {
       setIsSavingCert(false);
     }
@@ -236,6 +338,7 @@ export const ProfilePage = () => {
   const handleConfirmDelete = async () => {
     if (!deleteDialog.id || !deleteDialog.type) return;
 
+    setIsDeleting(true);
     try {
       if (deleteDialog.type === 'experience') {
         await competencyService.deleteExperience(deleteDialog.id);
@@ -247,69 +350,41 @@ export const ProfilePage = () => {
       setDeleteDialog({ isOpen: false, type: null, id: null, title: '' });
       await loadProfileData();
     } catch (err) {
-      showNotification(err?.response?.data?.error || 'Failed to remove entry.', 'error');
+      const errMsg = err?.message || err?.data?.error || err?.response?.data?.error || 'Failed to remove entry.';
+      showNotification(errMsg, 'error');
+      setDeleteDialog({ isOpen: false, type: null, id: null, title: '' });
+      await loadProfileData();
+    } finally {
+      setIsDeleting(false);
     }
   };
 
-  // Assessment completion handler
-  const handleAssessmentComplete = async () => {
-    setIsAssessmentModalOpen(false);
-    showNotification('Competency assessment submitted and evaluated by Random Forest model.', 'success');
-    await loadProfileData();
-  };
+  // Real, authoritative name & initials
+  const rawName = profileData?.full_name || user?.fullName || user?.username || 'Agent';
+  const cleanName = rawName.replace(/\s*\(Verified\)/gi, '').trim();
 
-  // User initials
-  const userInitials = profileData?.full_name
-    ? profileData.full_name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase()
-    : (user?.fullName ? user.fullName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() : 'AG');
+  const userInitials = cleanName
+    ? cleanName.split(' ').filter(Boolean).map(n => n[0]).join('').substring(0, 2).toUpperCase()
+    : 'AG';
 
-  // Competency Styling Helper
-  const getCompetencyBadgeStyle = (comp) => {
-    switch (comp) {
-      case 'ELIGIBLE':
-      case 'Eligible':
-      case 'ADVANCED':
-      case 'Advanced':
-      case 'COMPETENT':
-      case 'Competent':
-        return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-      case 'NOT_ELIGIBLE':
-      case 'Not Eligible':
-      case 'NEEDS_IMPROVEMENT':
-      case 'Needs Improvement':
-      case 'Ineligible':
-        return 'bg-rose-50 text-rose-700 border-rose-200';
-      case 'BASIC':
-      case 'Basic':
-        return 'bg-blue-50 text-blue-700 border-blue-200';
-      default:
-        return 'bg-slate-100 text-slate-600 border-slate-200';
-    }
-  };
-
-  const getDecisionBadge = (decision) => {
-    switch (decision) {
-      case 'Eligible':
-      case 'ELIGIBLE':
-        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">Eligible (ML Verified)</span>;
-      case 'Not Eligible':
-      case 'NOT_ELIGIBLE':
-      case 'Ineligible':
-        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">Not Eligible</span>;
-      case 'Send to Review':
-      case 'Borderline':
-        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">Verification Pending</span>;
-      default:
-        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">{decision || 'Pending'}</span>;
+  // Format dates cleanly without raw GMT time strings
+  const formatDate = (dateStr) => {
+    if (!dateStr) return '';
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return String(dateStr);
+      return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
+    } catch {
+      return String(dateStr);
     }
   };
 
   // Verification status badge helper
-  const renderVerificationBadge = (status, reason, reviewerName, reviewedAt) => {
+  const renderVerificationBadge = (status, reason, reviewerName) => {
     if (status === 'VERIFIED') {
       return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-950/60 text-emerald-400 border border-emerald-500/40">
+          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
           <span>Verified{reviewerName ? ` by ${reviewerName}` : ''}</span>
         </span>
       );
@@ -317,12 +392,12 @@ export const ProfilePage = () => {
     if (status === 'REJECTED') {
       return (
         <div className="flex flex-col items-start gap-1">
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
-            <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-950/60 text-rose-400 border border-rose-500/40">
+            <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
             <span>Verification Rejected</span>
           </span>
           {reason && (
-            <p className="text-[11px] text-rose-600 font-medium">
+            <p className="text-[11px] text-rose-400 font-medium">
               Reason: {reason}
             </p>
           )}
@@ -330,8 +405,8 @@ export const ProfilePage = () => {
       );
     }
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-        <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-950/60 text-amber-300 border border-amber-500/40">
+        <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
         <span>Pending Admin Verification</span>
       </span>
     );
@@ -351,45 +426,63 @@ export const ProfilePage = () => {
     certified_leverage: 0
   };
 
-  const assessmentSummary = profileData?.assessment_summary || {
-    has_assessed: false,
-    competency_level: 'Pending',
-    evaluation_decision: 'Not Evaluated',
-    overall_score: null,
-    scores: {}
-  };
+  // Authoritative Readiness Score & Pillar Checks computed directly from backend
+  const readinessScore = profileData?.readiness_score !== undefined 
+    ? profileData.readiness_score 
+    : 0;
+
+  const isContactComplete = Boolean(profileData?.readiness_checks?.personal_info);
+  const isExpComplete = Boolean(profileData?.readiness_checks?.experience);
+  const isCertComplete = Boolean(profileData?.readiness_checks?.certification);
+
+  const isAgentActive = (profileData?.agent_status === 'ACTIVE' || user?.status === 'ACTIVE');
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] flex flex-col font-sans text-slate-800">
-      {/* Top Navbar */}
-      <header className="bg-white border-b border-slate-200/80 px-6 sm:px-8 h-16 flex items-center justify-between sticky top-0 z-30">
-        <div className="flex items-center gap-2.5 select-none cursor-pointer" onClick={() => navigate('/dashboard')}>
-          <div className="w-8 h-8 rounded-lg bg-[#3B50BA] flex items-center justify-center p-1.5 shadow-xs shrink-0">
-            <svg 
-              viewBox="0 0 24 24" 
-              fill="none" 
-              stroke="currentColor" 
-              strokeWidth="2.2" 
-              strokeLinecap="round" 
-              strokeLinejoin="round" 
-              className="w-full h-full text-white"
-            >
-              <path d="M3 16l6-6 4 4 8-8" />
-              <path d="M14 6h7v7" />
+    <div className="min-h-screen bg-[#070b14] text-[#e8ebf7] flex flex-col font-sans relative selection:bg-[#5a69f0]/40 selection:text-white">
+      {/* Hidden file input for optional profile photo upload */}
+      <input 
+        type="file" 
+        ref={fileInputRef} 
+        onChange={handleAvatarFileChange} 
+        accept="image/*" 
+        className="hidden" 
+      />
+
+      {/* Ambient background glows */}
+      <div className="fixed top-0 left-1/4 w-96 h-96 bg-blue-600/10 rounded-full blur-3xl pointer-events-none -z-10" />
+      <div className="fixed bottom-10 right-10 w-96 h-96 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none -z-10" />
+
+      {/* ================================================================= */}
+      {/* TOP NAVBAR */}
+      {/* ================================================================= */}
+      <header className="bg-[#080d1a]/95 border-b border-[#1b2542] px-4 sm:px-8 h-16 flex items-center justify-between sticky top-0 z-40 backdrop-blur-md">
+        {/* Left: Brand */}
+        <div 
+          className="flex items-center gap-3 select-none cursor-pointer" 
+          onClick={() => navigate('/dashboard')}
+        >
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#4b5bd8] to-[#6f7dff] flex items-center justify-center p-2 shadow-lg shadow-indigo-500/25 shrink-0">
+            <svg viewBox="0 0 28 28" fill="none" className="w-full h-full text-white">
+              <path d="M6 8V18C6 20.2091 7.79086 22 10 22H20" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+              <path d="M10 17L15 13L21 16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <circle cx="10" cy="17" r="2.2" fill="currentColor" />
+              <circle cx="15" cy="13" r="2.2" fill="currentColor" />
+              <circle cx="21" cy="16" r="2.2" fill="currentColor" />
             </svg>
           </div>
-          <span className="text-lg font-bold text-slate-900 tracking-tight">
+          <span className="font-sora text-lg sm:text-xl font-bold text-white tracking-tight leading-none">
             VerifyMesh
           </span>
         </div>
 
+        {/* Right: Notifications & User Profile */}
         <div className="flex items-center gap-3 sm:gap-4">
           <button 
             type="button"
-            className="p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-50 rounded-full transition-colors relative"
+            className="p-2 text-slate-400 hover:text-white hover:bg-[#151f38] rounded-xl transition-colors relative"
             aria-label="Notifications"
           >
-            <Bell className="w-5 h-5" />
+            <Bell className="w-4 h-4" />
           </button>
 
           {/* User Profile Pill & Dropdown */}
@@ -397,33 +490,41 @@ export const ProfilePage = () => {
             <button
               type="button"
               onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
-              className="flex items-center gap-2.5 p-1 sm:px-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer select-none"
+              className="flex items-center gap-2.5 p-1 sm:px-2 rounded-xl hover:bg-[#151f38] transition-colors cursor-pointer select-none"
             >
-              <div className="w-9 h-9 rounded-full bg-[#E0E7FF] text-[#3B50BA] font-bold text-xs sm:text-sm flex items-center justify-center">
-                {userInitials}
-              </div>
+              {avatarUrl ? (
+                <img 
+                  src={avatarUrl} 
+                  alt={cleanName} 
+                  className="w-8 h-8 rounded-full object-cover border border-[#2b3a67] shadow-xs" 
+                />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 text-white font-bold text-xs flex items-center justify-center shadow-xs">
+                  {userInitials}
+                </div>
+              )}
               <div className="text-left hidden sm:block">
-                <p className="text-sm font-semibold text-slate-900 leading-tight">
-                  {profileData?.full_name || user?.fullName || 'Agent'}
+                <p className="text-xs font-semibold text-white leading-tight">
+                  {cleanName}
                 </p>
-                <p className="text-xs text-slate-400 leading-tight">
+                <p className="text-[10px] text-slate-400 leading-tight">
                   {user?.role || 'Agent'}
                 </p>
               </div>
-              <ChevronDown className="w-4 h-4 text-slate-400" />
+              <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
             </button>
 
             {isUserMenuOpen && (
-              <div className="absolute right-0 mt-2 w-52 bg-white rounded-xl shadow-lg border border-slate-150 py-1.5 z-40 animate-in fade-in zoom-in-95 duration-150">
+              <div className="absolute right-0 mt-2 w-56 bg-[#0d1428] rounded-xl shadow-2xl border border-[#2b3a67] py-1.5 z-50 animate-in fade-in zoom-in-95 duration-150 text-xs">
                 <button
                   type="button"
                   onClick={() => {
                     setIsUserMenuOpen(false);
                     navigate('/dashboard');
                   }}
-                  className="w-full text-left px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                  className="w-full text-left px-3.5 py-2.5 font-medium text-slate-300 hover:bg-[#15203d] hover:text-white flex items-center gap-2"
                 >
-                  <LayoutGrid className="w-3.5 h-3.5 text-slate-500" />
+                  <LayoutGrid className="w-3.5 h-3.5 text-slate-400" />
                   Dashboard
                 </button>
                 <button
@@ -432,16 +533,16 @@ export const ProfilePage = () => {
                     setIsUserMenuOpen(false);
                     navigate('/profile');
                   }}
-                  className="w-full text-left px-3 py-2 text-xs font-semibold text-[#3B50BA] bg-blue-50/60 flex items-center gap-2"
+                  className="w-full text-left px-3.5 py-2.5 font-semibold text-white bg-[#1a2850] flex items-center gap-2"
                 >
-                  <User className="w-3.5 h-3.5 text-[#3B50BA]" />
+                  <User className="w-3.5 h-3.5 text-indigo-400" />
                   My Profile
                 </button>
-                <div className="border-t border-slate-100 my-1" />
+                <div className="border-t border-[#1e2a4a] my-1" />
                 <button
                   type="button"
                   onClick={handleLogout}
-                  className="w-full text-left px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 flex items-center gap-2"
+                  className="w-full text-left px-3.5 py-2.5 font-medium text-rose-400 hover:bg-rose-950/40 flex items-center gap-2"
                 >
                   <LogOut className="w-3.5 h-3.5" />
                   Sign Out
@@ -452,165 +553,250 @@ export const ProfilePage = () => {
         </div>
       </header>
 
-      {/* Main Container with Sidebar + Content */}
-      <div className="flex-1 flex flex-col md:flex-row max-w-[1440px] w-full mx-auto">
-        {/* Left Sidebar */}
-        <aside className="w-full md:w-56 lg:w-60 bg-white border-r border-slate-200/80 flex flex-col justify-between p-4 shrink-0">
-          <div className="space-y-1">
+      {/* ================================================================= */}
+      {/* MAIN CONTAINER: SIDEBAR + CONTENT */}
+      {/* ================================================================= */}
+      <div className="flex-1 flex max-w-[1600px] w-full mx-auto relative">
+        {/* Left Collapsible Sidebar */}
+        <aside 
+          className={`bg-[#080d1a] border-r border-[#1b2542] flex flex-col justify-between p-3.5 shrink-0 transition-all duration-300 ease-in-out relative ${
+            isSidebarCollapsed ? 'w-20' : 'w-56 lg:w-60'
+          }`}
+        >
+          {/* Top Navigation Links */}
+          <div className="space-y-1.5">
+            {/* Collapse / Expand Toggle Button */}
+            <div className="flex items-center justify-end pb-2">
+              <button
+                type="button"
+                onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+                className="w-6 h-6 rounded-full bg-[#12192e] border border-[#2b3a67] text-slate-300 hover:text-white flex items-center justify-center transition-all shadow-md hover:scale-105 cursor-pointer"
+                title={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              >
+                {isSidebarCollapsed ? (
+                  <ChevronRight className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                )}
+              </button>
+            </div>
+
+            {/* Dashboard Link */}
             <button
               type="button"
               onClick={() => navigate('/dashboard')}
-              className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors cursor-pointer"
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-[#121a30] transition-colors cursor-pointer ${
+                isSidebarCollapsed ? 'justify-center' : ''
+              }`}
+              title="Dashboard"
             >
-              <LayoutGrid className="w-4 h-4 text-slate-500" />
-              <span>Dashboard</span>
+              <LayoutGrid className="w-4 h-4 text-slate-400 shrink-0" />
+              {!isSidebarCollapsed && <span>Dashboard</span>}
             </button>
 
+            {/* My Profile Link (Active Glowing Pill) */}
             <button
               type="button"
               onClick={() => navigate('/profile')}
-              className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold bg-[#EEF2FF] text-[#3B50BA] transition-colors cursor-pointer"
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold text-white bg-gradient-to-r from-[#2942d9] via-[#465deb] to-[#6074f7] shadow-[0_0_20px_rgba(70,93,235,0.45)] transition-all cursor-pointer relative overflow-hidden ${
+                isSidebarCollapsed ? 'justify-center px-0' : ''
+              }`}
+              title="My Profile"
             >
-              <User className="w-4 h-4 text-[#3B50BA]" />
-              <span>My Profile</span>
+              <User className="w-4 h-4 text-white shrink-0" />
+              {!isSidebarCollapsed && <span>My Profile</span>}
             </button>
 
+            {/* Tasks Link */}
             <button
               type="button"
               onClick={() => navigate('/tasks')}
-              className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors cursor-pointer"
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-[#121a30] transition-colors cursor-pointer ${
+                isSidebarCollapsed ? 'justify-center' : ''
+              }`}
+              title="Tasks"
             >
-              <ListChecks className="w-4 h-4 text-slate-500" />
-              <span>Tasks</span>
+              <ListChecks className="w-4 h-4 text-slate-400 shrink-0" />
+              {!isSidebarCollapsed && <span>Tasks</span>}
             </button>
           </div>
 
-          {/* Model Integration Widget */}
-          <div className="my-6 p-4 rounded-2xl bg-gradient-to-br from-blue-50/80 to-indigo-50/40 border border-blue-100 hidden md:block">
-            <div className="flex items-center gap-2 text-xs font-bold text-[#3B50BA]">
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Random Forest Sync</span>
-            </div>
-            <p className="text-[11px] text-slate-600 mt-1.5 leading-relaxed">
-              Experience months &amp; certifications are verified by admins before model feature injection.
-            </p>
-            <div className="mt-3 pt-2.5 border-t border-blue-100/60 flex items-center justify-between text-[11px] text-slate-500">
-              <span>Verified Months:</span>
-              <span className="font-bold text-slate-800">{verifiedExp.total_experience_months} mos</span>
-            </div>
-            <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
-              <span>Verified Certs:</span>
-              <span className="font-bold text-slate-800">{verifiedCerts.certification_count}</span>
-            </div>
-          </div>
-
-          <div className="space-y-1 pt-4 border-t border-slate-150">
+          {/* Bottom Sidebar Sign Out */}
+          <div className="pt-4 border-t border-[#1b2542]">
             <button
               type="button"
               onClick={handleLogout}
-              className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-600 hover:text-rose-600 hover:bg-rose-50/60 transition-colors"
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-rose-400 hover:bg-rose-950/30 transition-colors ${
+                isSidebarCollapsed ? 'justify-center' : ''
+              }`}
+              title="Sign Out"
             >
-              <LogOut className="w-4 h-4 text-slate-500 hover:text-rose-600" />
-              <span>Sign Out</span>
+              <LogOut className="w-4 h-4 text-slate-400 shrink-0" />
+              {!isSidebarCollapsed && <span>Sign Out</span>}
             </button>
           </div>
         </aside>
 
         {/* Main Content Area */}
-        <main className="flex-1 p-6 sm:p-8 lg:p-10 space-y-8 overflow-y-auto max-w-5xl">
+        <main className="flex-1 p-5 sm:p-7 lg:p-8 space-y-6 overflow-y-auto max-w-5xl mx-auto w-full">
           {/* Notifications */}
           {successMessage && (
-            <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm flex items-center gap-3 shadow-xs animate-in fade-in duration-200">
-              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            <div className="p-4 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-xs sm:text-sm flex items-center gap-3 shadow-lg shadow-emerald-950/50 animate-in fade-in duration-200">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
               <span>{successMessage}</span>
             </div>
           )}
 
           {errorMessage && (
-            <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm flex items-center gap-3 shadow-xs animate-in fade-in duration-200">
-              <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+            <div className="p-4 rounded-xl bg-rose-950/60 border border-rose-500/40 text-rose-300 text-xs sm:text-sm flex items-center gap-3 shadow-lg shadow-rose-950/50 animate-in fade-in duration-200">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
               <span>{errorMessage}</span>
             </div>
           )}
 
           {/* ================================================================= */}
-          {/* SECTION 1: PROFILE OVERVIEW & READINESS */}
+          {/* PROFILE HERO / READINESS CARD */}
           {/* ================================================================= */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-8 shadow-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 pb-6 border-b border-slate-100">
+          <div className="bg-[#0b1020]/90 border border-[#24335c]/80 rounded-2xl p-6 sm:p-7 shadow-[0_0_30px_rgba(15,23,42,0.8)] backdrop-blur-xl relative overflow-hidden">
+            {/* Top Row: Avatar with Optional Upload, Name, Verified Badge, and Back to Dashboard */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-5">
               <div className="flex items-center gap-4 sm:gap-5">
-                <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-[#E0E7FF] text-[#3B50BA] font-bold text-2xl sm:text-3xl flex items-center justify-center shadow-xs shrink-0">
-                  {userInitials}
+                {/* Avatar with optional upload/edit overlay */}
+                <div className="relative group shrink-0">
+                  {avatarUrl ? (
+                    <img 
+                      src={avatarUrl} 
+                      alt={cleanName} 
+                      className="w-16 h-16 sm:w-20 sm:h-20 rounded-full object-cover border-2 border-[#2b3a67] shadow-lg"
+                      onError={() => setAvatarUrl(null)}
+                    />
+                  ) : (
+                    <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-gradient-to-br from-indigo-600 to-purple-700 text-white font-bold text-xl sm:text-2xl flex items-center justify-center border-2 border-[#2b3a67] shadow-lg">
+                      {userInitials}
+                    </div>
+                  )}
+
+                  {/* Status Indicator Dots */}
+                  {isAgentActive && (
+                    <>
+                      <span className="absolute top-1 -right-0.5 w-3 h-3 bg-emerald-400 rounded-full border-2 border-[#0b1020] shadow-[0_0_8px_#34d399]" />
+                      <span className="absolute bottom-1 -right-0.5 w-3 h-3 bg-emerald-400 rounded-full border-2 border-[#0b1020] shadow-[0_0_8px_#34d399]" />
+                    </>
+                  )}
+
+                  {/* Upload / Edit Button Overlay on Hover */}
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="absolute inset-0 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-white cursor-pointer"
+                    title={avatarUrl ? 'Change profile photo' : 'Upload profile photo (optional)'}
+                  >
+                    <Camera className="w-5 h-5 text-indigo-300" />
+                  </button>
                 </div>
+
+                {/* Name, Status Pill & Email */}
                 <div>
-                  <div className="flex items-center gap-2.5 flex-wrap">
-                    <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">
-                      {profileData?.full_name || 'Agent Profile'}
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <h1 className="text-xl sm:text-2xl font-bold font-sora text-white tracking-tight">
+                      {cleanName}
                     </h1>
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      {profileData?.agent_status === 'ACTIVE' ? 'Verified Active Agent' : (profileData?.agent_status || 'Verified Agent')}
-                    </span>
-                  </div>
-                  <p className="text-xs sm:text-sm text-slate-500 mt-1 flex items-center gap-2 flex-wrap">
-                    <span>{profileData?.email || user?.email}</span>
-                    <span>&bull;</span>
-                    <span>System ID: <strong className="text-slate-700 font-mono">VM-AGT-{profileData?.agent_id || user?.id || '1'}</strong></span>
-                    {profileData?.member_since && (
-                      <>
-                        <span>&bull;</span>
-                        <span>Member since {new Date(profileData.member_since).toLocaleDateString()}</span>
-                      </>
+
+                    {isAgentActive ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-xs font-semibold bg-emerald-950/50 text-emerald-400 border border-emerald-500/40 shadow-xs">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                        Verified Active Agent
+                      </span>
+                    ) : profileData?.agent_status === 'SUSPENDED' ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-xs font-semibold bg-rose-950/50 text-rose-400 border border-rose-500/40 shadow-xs">
+                        <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+                        Suspended
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-xs font-semibold bg-amber-950/50 text-amber-400 border border-amber-500/40 shadow-xs">
+                        <Clock className="w-3.5 h-3.5 text-amber-400" />
+                        Verification Pending
+                      </span>
                     )}
+                  </div>
+                  <p className="text-xs sm:text-sm text-[#8d97b8] mt-1">
+                    {profileData?.email || user?.email || 'No email registered'}
                   </p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-3 shrink-0">
-                <Button variant="secondary" size="sm" onClick={() => navigate('/dashboard')}>
+              {/* Back to Dashboard Button */}
+              <div className="shrink-0">
+                <button
+                  type="button"
+                  onClick={() => navigate('/dashboard')}
+                  className="px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-[#111933]/90 text-indigo-300 border border-indigo-500/40 hover:bg-indigo-950/60 hover:border-indigo-400 hover:text-white transition-all shadow-[0_0_15px_rgba(99,102,241,0.2)] cursor-pointer"
+                >
                   Back to Dashboard
-                </Button>
+                </button>
               </div>
             </div>
 
-            {/* Profile Readiness Bar */}
-            <div className="pt-6">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                    Profile Readiness Score
-                  </span>
-                  <span className="text-xs text-slate-400">
-                    (3 Core Verification Pillars)
-                  </span>
-                </div>
-                <span className="text-sm font-bold text-[#3B50BA]">
-                  {profileData?.readiness_score ?? 0}% Complete
+            {/* Middle Row: Profile Readiness Score */}
+            <div className="mt-6 pt-5 border-t border-[#1b2542]/80">
+              <div className="flex items-center justify-between text-xs font-semibold mb-2">
+                <span className="text-[#8d97b8] uppercase tracking-wider font-bold">
+                  Profile Readiness Score
+                </span>
+                <span className="text-white font-bold">
+                  {readinessScore}% Complete
                 </span>
               </div>
 
-              {/* Progress bar */}
-              <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+              {/* Glowing Progress Bar */}
+              <div className="w-full bg-[#141c33] rounded-full h-2 overflow-hidden my-3">
                 <div 
-                  className="bg-[#3B50BA] h-2.5 rounded-full transition-all duration-500 ease-out" 
-                  style={{ width: `${profileData?.readiness_score ?? 0}%` }}
+                  className="h-2 rounded-full bg-gradient-to-r from-blue-500 via-indigo-500 to-[#6f7dff] shadow-[0_0_12px_rgba(99,102,241,0.7)] transition-all duration-500 ease-out" 
+                  style={{ width: `${readinessScore}%` }}
                 />
               </div>
 
-              {/* Pillar Checklist */}
+              {/* 3 Verification Pillars Checklist (Authoritative Backend State) */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4 text-xs">
-                <div className={`p-2.5 rounded-xl border flex items-center gap-2 ${profileData?.readiness_checks?.personal_info ? 'bg-emerald-50/60 border-emerald-200 text-emerald-800' : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
-                  {profileData?.readiness_checks?.personal_info ? <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> : <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />}
+                {/* 1. Contact & Bio */}
+                <div className={`py-2 px-3.5 rounded-xl border flex items-center gap-2 ${
+                  isContactComplete 
+                    ? 'border-emerald-500/40 bg-emerald-950/30 text-emerald-300' 
+                    : 'border-[#202b4d] bg-[#0c1224] text-[#8d97b8]'
+                }`}>
+                  {isContactComplete ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  ) : (
+                    <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  )}
                   <span className="font-medium">1. Contact &amp; Bio</span>
                 </div>
 
-                <div className={`p-2.5 rounded-xl border flex items-center gap-2 ${profileData?.readiness_checks?.experience ? 'bg-emerald-50/60 border-emerald-200 text-emerald-800' : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
-                  {profileData?.readiness_checks?.experience ? <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> : <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />}
+                {/* 2. Verified Experience */}
+                <div className={`py-2 px-3.5 rounded-xl border flex items-center gap-2 ${
+                  isExpComplete 
+                    ? 'border-emerald-500/40 bg-emerald-950/30 text-emerald-300' 
+                    : 'border-[#202b4d] bg-[#0c1224] text-[#8d97b8]'
+                }`}>
+                  {isExpComplete ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  ) : (
+                    <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  )}
                   <span className="font-medium">2. Verified Experience</span>
                 </div>
 
-                <div className={`p-2.5 rounded-xl border flex items-center gap-2 ${profileData?.readiness_checks?.certification ? 'bg-emerald-50/60 border-emerald-200 text-emerald-800' : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
-                  {profileData?.readiness_checks?.certification ? <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> : <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />}
+                {/* 3. Certifications */}
+                <div className={`py-2 px-3.5 rounded-xl border flex items-center gap-2 ${
+                  isCertComplete 
+                    ? 'border-emerald-500/40 bg-emerald-950/30 text-emerald-300' 
+                    : 'border-[#202b4d] bg-[#0c1224] text-[#8d97b8]'
+                }`}>
+                  {isCertComplete ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  ) : (
+                    <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  )}
                   <span className="font-medium">3. Certifications</span>
                 </div>
               </div>
@@ -618,497 +804,622 @@ export const ProfilePage = () => {
           </div>
 
           {/* ================================================================= */}
-          {/* SECTION 2: PERSONAL & CONTACT INFORMATION */}
+          {/* TABS NAVIGATION BAR */}
           {/* ================================================================= */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-8 shadow-xs space-y-6">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-              <div>
-                <h2 className="text-lg font-bold text-slate-900">Personal &amp; Contact Information</h2>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Update your contact details and professional summary. System credentials and status remain read-only.
-                </p>
+          <div className="border-b border-[#1b2542] flex items-center gap-6 sm:gap-8 pt-2">
+            <button
+              type="button"
+              onClick={() => setActiveTab('personal')}
+              className={`pb-3 text-sm font-semibold transition-all relative cursor-pointer ${
+                activeTab === 'personal'
+                  ? 'text-white border-b-2 border-indigo-500 shadow-[0_4px_12px_rgba(99,102,241,0.5)]'
+                  : 'text-[#8d97b8] hover:text-white border-b-2 border-transparent'
+              }`}
+            >
+              Personal &amp; Contact Info
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('experience')}
+              className={`pb-3 text-sm font-semibold transition-all relative cursor-pointer ${
+                activeTab === 'experience'
+                  ? 'text-white border-b-2 border-indigo-500 shadow-[0_4px_12px_rgba(99,102,241,0.5)]'
+                  : 'text-[#8d97b8] hover:text-white border-b-2 border-transparent'
+              }`}
+            >
+              Verified Experience
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('certifications')}
+              className={`pb-3 text-sm font-semibold transition-all relative cursor-pointer ${
+                activeTab === 'certifications'
+                  ? 'text-white border-b-2 border-indigo-500 shadow-[0_4px_12px_rgba(99,102,241,0.5)]'
+                  : 'text-[#8d97b8] hover:text-white border-b-2 border-transparent'
+              }`}
+            >
+              Certifications
+            </button>
+          </div>
+
+          {/* ================================================================= */}
+          {/* TAB 1: PERSONAL & CONTACT INFO CARD */}
+          {/* ================================================================= */}
+          {activeTab === 'personal' && (
+            <div className="bg-[#0b1020]/90 border border-[#24335c]/80 rounded-2xl p-6 sm:p-8 shadow-[0_0_30px_rgba(15,23,42,0.8)] backdrop-blur-xl space-y-6">
+              <div className="flex items-center justify-between pb-3 border-b border-[#1b2542]">
+                <h2 className="text-lg font-bold font-sora text-white">Personal Info</h2>
+
+                {!isEditingPersonalInfo ? (
+                  <button 
+                    type="button"
+                    onClick={() => setIsEditingPersonalInfo(true)}
+                    className="px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-[#111933]/90 text-indigo-300 border border-indigo-500/50 hover:bg-indigo-950/60 hover:border-indigo-400 hover:text-white transition-all flex items-center gap-2 shadow-[0_0_15px_rgba(99,102,241,0.25)] cursor-pointer"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>Edit Profile</span>
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <button 
+                      type="button"
+                      onClick={() => {
+                        setIsEditingPersonalInfo(false);
+                        setPersonalForm({
+                          full_name: profileData?.full_name || '',
+                          phone: profileData?.phone || '',
+                          location: profileData?.location || '',
+                          education: profileData?.education || '',
+                          bio: profileData?.bio || ''
+                        });
+                      }}
+                      className="px-3 py-1.5 text-xs text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button 
+                      type="button"
+                      onClick={handleSavePersonal}
+                      disabled={isSavingPersonal}
+                      className="px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-[0_0_15px_rgba(59,130,246,0.5)] flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      <span>{isSavingPersonal ? 'Saving...' : 'Save Changes'}</span>
+                    </button>
+                  </div>
+                )}
               </div>
 
-              {!isEditingPersonalInfo ? (
-                <Button 
-                  variant="secondary" 
-                  size="sm" 
-                  onClick={() => setIsEditingPersonalInfo(true)}
-                  className="flex items-center gap-1.5"
+              {isEditingPersonalInfo ? (
+                /* Edit Mode Form */
+                <form onSubmit={handleSavePersonal} className="space-y-4">
+                  {/* Photo Management in Edit Mode */}
+                  <div className="p-4 rounded-xl bg-[#080d1c] border border-[#232f52] flex items-center justify-between gap-4 flex-wrap">
+                    <div className="flex items-center gap-3">
+                      {avatarUrl ? (
+                        <img 
+                          src={avatarUrl} 
+                          alt="Avatar Preview" 
+                          className="w-12 h-12 rounded-full object-cover border border-[#2b3a67]"
+                        />
+                      ) : (
+                        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-indigo-600 to-purple-700 text-white font-bold text-sm flex items-center justify-center border border-[#2b3a67]">
+                          {userInitials}
+                        </div>
+                      )}
+                      <div>
+                        <p className="text-xs font-semibold text-white">Profile Photo (Optional)</p>
+                        <p className="text-[11px] text-slate-400">JPG, PNG, or WebP up to 2MB</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[#131d36] text-indigo-300 border border-indigo-500/40 hover:bg-indigo-900/50 cursor-pointer flex items-center gap-1.5"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>{avatarUrl ? 'Change Photo' : 'Upload Photo'}</span>
+                      </button>
+
+                      {avatarUrl && (
+                        <button
+                          type="button"
+                          onClick={handleRemoveAvatar}
+                          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-rose-950/40 text-rose-300 border border-rose-500/40 hover:bg-rose-900/50 cursor-pointer flex items-center gap-1.5"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Remove</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        Full Legal Name <span className="text-rose-400">*</span>
+                      </label>
+                      <input 
+                        type="text"
+                        value={personalForm.full_name}
+                        onChange={(e) => setPersonalForm({ ...personalForm, full_name: e.target.value })}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white focus:outline-none focus:border-[#5a69f0] focus:ring-1 focus:ring-[#5a69f0]"
+                        placeholder="e.g. Full Legal Name"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        Education &amp; Background
+                      </label>
+                      <input 
+                        type="text"
+                        value={personalForm.education}
+                        onChange={(e) => setPersonalForm({ ...personalForm, education: e.target.value })}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white focus:outline-none focus:border-[#5a69f0] focus:ring-1 focus:ring-[#5a69f0]"
+                        placeholder="e.g. B.S. in Business Administration"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        Phone Number
+                      </label>
+                      <input 
+                        type="tel"
+                        value={personalForm.phone}
+                        onChange={(e) => setPersonalForm({ ...personalForm, phone: e.target.value })}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white focus:outline-none focus:border-[#5a69f0] focus:ring-1 focus:ring-[#5a69f0]"
+                        placeholder="e.g. +254 700 000000"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        Location / City
+                      </label>
+                      <input 
+                        type="text"
+                        value={personalForm.location}
+                        onChange={(e) => setPersonalForm({ ...personalForm, location: e.target.value })}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white focus:outline-none focus:border-[#5a69f0] focus:ring-1 focus:ring-[#5a69f0]"
+                        placeholder="e.g. Nairobi, Kenya"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      Professional Summary / Bio
+                    </label>
+                    <textarea 
+                      rows={3}
+                      value={personalForm.bio}
+                      onChange={(e) => setPersonalForm({ ...personalForm, bio: e.target.value })}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white focus:outline-none focus:border-[#5a69f0] focus:ring-1 focus:ring-[#5a69f0]"
+                      placeholder="Share your professional summary, background, domains of interest, or strengths..."
+                    />
+                  </div>
+                </form>
+              ) : (
+                /* View Mode Grid - strictly genuine data only */
+                <div className="space-y-6">
+                  {/* Personal Info Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-4 gap-x-8">
+                    <div>
+                      <span className="text-xs text-[#8d97b8] font-medium block">Full Name</span>
+                      <p className="text-sm font-semibold text-white mt-1">
+                        {cleanName}
+                      </p>
+                    </div>
+
+                    <div>
+                      <span className="text-xs text-[#8d97b8] font-medium block">Education &amp; Background</span>
+                      <p className="text-sm font-semibold text-white mt-1">
+                        {profileData?.education || 'Not specified'}
+                      </p>
+                    </div>
+
+                    <div>
+                      <span className="text-xs text-[#8d97b8] font-medium block">Availability Status</span>
+                      <p className="text-sm font-semibold text-white mt-1">
+                        {profileData?.availability_status === 'AVAILABLE' 
+                          ? 'Available for Tasks' 
+                          : profileData?.availability_status === 'PARTIALLY_AVAILABLE'
+                          ? 'Partially Available'
+                          : profileData?.availability_status || 'Available'}
+                      </p>
+                    </div>
+
+                    <div>
+                      <span className="text-xs text-[#8d97b8] font-medium block">Location</span>
+                      <p className="text-sm font-semibold text-white mt-1">
+                        {profileData?.location || 'Not specified'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Divider line */}
+                  <div className="border-t border-[#1b2542]" />
+
+                  {/* Contact Information Sub-Section */}
+                  <div>
+                    <h3 className="text-sm font-bold font-sora text-white mb-3">Contact Information</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-y-4 gap-x-6">
+                      <div>
+                        <span className="text-xs text-[#8d97b8] font-medium block">Email</span>
+                        <p className="text-sm font-semibold text-white mt-1">
+                          {profileData?.email || user?.email || 'Not specified'}
+                        </p>
+                      </div>
+
+                      <div>
+                        <span className="text-xs text-[#8d97b8] font-medium block">Phone</span>
+                        <p className="text-sm font-semibold text-white mt-1">
+                          {profileData?.phone || 'Not provided'}
+                        </p>
+                      </div>
+
+                      <div>
+                        <span className="text-xs text-[#8d97b8] font-medium block">Location</span>
+                        <p className="text-sm font-semibold text-white mt-1">
+                          {profileData?.location || 'Not specified'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Divider line */}
+                  <div className="border-t border-[#1b2542]" />
+
+                  {/* Summary Sub-Section */}
+                  <div>
+                    <h3 className="text-sm font-bold font-sora text-white mb-2">Summary</h3>
+                    {profileData?.bio ? (
+                      <p className="text-xs sm:text-sm text-slate-300 leading-relaxed whitespace-pre-line">
+                        {profileData.bio}
+                      </p>
+                    ) : (
+                      <p className="text-xs sm:text-sm text-slate-400 italic">
+                        No professional summary provided yet. Click &quot;Edit Profile&quot; to add your professional introduction.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ================================================================= */}
+          {/* TAB 2: VERIFIED EXPERIENCE CARD */}
+          {/* ================================================================= */}
+          {activeTab === 'experience' && (
+            <div className="bg-[#0b1020]/90 border border-[#24335c]/80 rounded-2xl p-6 sm:p-8 shadow-[0_0_30px_rgba(15,23,42,0.8)] backdrop-blur-xl space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-[#1b2542]">
+                <div>
+                  <h2 className="text-lg font-bold font-sora text-white">Work Experience &amp; Verified Tenures</h2>
+                  <p className="text-xs text-[#8d97b8] mt-0.5">
+                    Records are reviewed by administrators. Verified months are calculated without double-counting overlapping tenures.
+                  </p>
+                </div>
+
+                <button 
+                  type="button"
+                  onClick={() => setIsAddExpOpen(true)}
+                  className="px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-[0_0_15px_rgba(59,130,246,0.4)] hover:brightness-110 transition-all flex items-center gap-1.5 shrink-0 cursor-pointer"
                 >
-                  <Edit3 className="w-3.5 h-3.5" />
-                  <span>Edit Profile</span>
-                </Button>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    onClick={() => {
-                      setIsEditingPersonalInfo(false);
-                      setPersonalForm({
-                        full_name: profileData?.full_name || '',
-                        phone: profileData?.phone || '',
-                        location: profileData?.location || '',
-                        bio: profileData?.bio || ''
-                      });
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                  <Button 
-                    size="sm" 
-                    onClick={handleSavePersonal}
-                    disabled={isSavingPersonal}
-                    className="flex items-center gap-1.5"
-                  >
-                    <Save className="w-3.5 h-3.5" />
-                    <span>{isSavingPersonal ? 'Saving...' : 'Save Changes'}</span>
-                  </Button>
-                </div>
-              )}
-            </div>
+                  <Plus className="w-4 h-4" />
+                  <span>Add Work Experience</span>
+                </button>
+              </div>
 
-            {isEditingPersonalInfo ? (
-              /* Edit Mode Form */
-              <form onSubmit={handleSavePersonal} className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Full Legal Name <span className="text-rose-500">*</span>
-                    </label>
-                    <input 
-                      type="text"
-                      value={personalForm.full_name}
-                      onChange={(e) => setPersonalForm({ ...personalForm, full_name: e.target.value })}
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA] focus:ring-1 focus:ring-[#3B50BA]"
-                      placeholder="e.g. Alex Morgan"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Phone Number
-                    </label>
-                    <input 
-                      type="tel"
-                      value={personalForm.phone}
-                      onChange={(e) => setPersonalForm({ ...personalForm, phone: e.target.value })}
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA] focus:ring-1 focus:ring-[#3B50BA]"
-                      placeholder="e.g. +1 (555) 234-5678"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Primary Location / Timezone
-                  </label>
-                  <input 
-                    type="text"
-                    value={personalForm.location}
-                    onChange={(e) => setPersonalForm({ ...personalForm, location: e.target.value })}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA] focus:ring-1 focus:ring-[#3B50BA]"
-                    placeholder="e.g. Chicago, IL (US Central)"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Professional Bio / Summary
-                  </label>
-                  <textarea 
-                    rows={3}
-                    value={personalForm.bio}
-                    onChange={(e) => setPersonalForm({ ...personalForm, bio: e.target.value })}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA] focus:ring-1 focus:ring-[#3B50BA]"
-                    placeholder="Highlight your key background, specialized domains, and communication strengths..."
-                  />
-                  <p className="text-[11px] text-slate-400 mt-1">Brief summary displayed to task review evaluators.</p>
-                </div>
-              </form>
-            ) : (
-              /* View Mode Grid */
-              <div className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs sm:text-sm">
-                  <div className="p-3.5 rounded-xl border border-slate-200/80 bg-slate-50/50">
-                    <span className="text-[11px] text-slate-400 block font-semibold uppercase">Legal Full Name</span>
-                    <p className="text-sm font-semibold text-slate-900 mt-1 flex items-center gap-2">
-                      <User className="w-4 h-4 text-slate-400" />
-                      <span>{profileData?.full_name || 'Not provided'}</span>
-                    </p>
-                  </div>
-
-                  <div className="p-3.5 rounded-xl border border-slate-200/80 bg-slate-50/50">
-                    <span className="text-[11px] text-slate-400 block font-semibold uppercase">Registered Email</span>
-                    <p className="text-sm font-semibold text-slate-900 mt-1 flex items-center gap-2">
-                      <Mail className="w-4 h-4 text-slate-400" />
-                      <span>{profileData?.email || user?.email}</span>
-                      <Lock className="w-3 h-3 text-slate-300 ml-auto" title="System Locked" />
-                    </p>
-                  </div>
-
-                  <div className="p-3.5 rounded-xl border border-slate-200/80 bg-slate-50/50">
-                    <span className="text-[11px] text-slate-400 block font-semibold uppercase">Contact Phone</span>
-                    <p className="text-sm font-semibold text-slate-900 mt-1 flex items-center gap-2">
-                      <Phone className="w-4 h-4 text-slate-400" />
-                      <span>{profileData?.phone || 'No phone recorded'}</span>
-                    </p>
-                  </div>
-
-                  <div className="p-3.5 rounded-xl border border-slate-200/80 bg-slate-50/50">
-                    <span className="text-[11px] text-slate-400 block font-semibold uppercase">Location &amp; Timezone</span>
-                    <p className="text-sm font-semibold text-slate-900 mt-1 flex items-center gap-2">
-                      <MapPin className="w-4 h-4 text-slate-400" />
-                      <span>{profileData?.location || 'No location specified'}</span>
-                    </p>
-                  </div>
-                </div>
-
-                {/* Bio Block */}
-                <div className="p-4 rounded-xl border border-slate-200/80 bg-slate-50/50">
-                  <span className="text-[11px] text-slate-400 block font-semibold uppercase mb-1">
-                    Professional Summary &amp; Background
+              {/* Verified Experience Metric Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52]">
+                  <span className="text-[11px] font-semibold text-[#8d97b8] uppercase tracking-wider block">
+                    Total Verified Experience
                   </span>
-                  <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
-                    {profileData?.bio || 'No professional bio provided yet. Click "Edit Profile" to add your professional introduction.'}
+                  <p className="text-2xl font-bold text-white mt-1">
+                    {verifiedExp.total_experience_months} <span className="text-xs font-normal text-slate-400">months</span>
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    ({(verifiedExp.total_experience_months / 12).toFixed(1)} years merged)
                   </p>
                 </div>
 
-                {/* Read-only System Metadata Cards */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
-                  <div className="p-3 rounded-xl border border-slate-200 bg-slate-50 text-xs">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">System Role</span>
-                    <span className="font-semibold text-[#3B50BA] mt-0.5 block flex items-center gap-1.5">
-                      <ShieldCheck className="w-3.5 h-3.5 text-[#3B50BA]" />
-                      Agent (Workforce)
-                    </span>
-                  </div>
-
-                  <div className="p-3 rounded-xl border border-slate-200 bg-slate-50 text-xs">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Account Identifier</span>
-                    <span className="font-mono font-semibold text-slate-800 mt-0.5 block">
-                      VM-AGT-{profileData?.agent_id || user?.id || '1'}
-                    </span>
-                  </div>
-
-                  <div className="p-3 rounded-xl border border-slate-200 bg-slate-50 text-xs">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Account Security</span>
-                    <span className="font-semibold text-emerald-600 mt-0.5 block flex items-center gap-1.5">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      Email Verified &amp; Active
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* ================================================================= */}
-          {/* SECTION 3: WORK HISTORY & VERIFIED EXPERIENCE */}
-          {/* ================================================================= */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-8 shadow-xs space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
-              <div>
-                <div className="flex items-center gap-2">
-                  <Briefcase className="w-5 h-5 text-[#3B50BA]" />
-                  <h2 className="text-lg font-bold text-slate-900">Work Experience &amp; Verified Tenures</h2>
-                </div>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Records are reviewed by administrators. Verified months are calculated without double-counting overlapping tenures.
-                </p>
-              </div>
-
-              <Button 
-                size="sm" 
-                onClick={() => setIsAddExpOpen(true)}
-                className="flex items-center gap-1.5 shrink-0"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Work Experience</span>
-              </Button>
-            </div>
-
-            {/* Verified Experience Metric Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-                  Total Verified Experience
-                </span>
-                <p className="text-2xl font-bold text-slate-900 mt-1">
-                  {verifiedExp.total_experience_months} <span className="text-sm font-normal text-slate-500">months</span>
-                </p>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  ({(verifiedExp.total_experience_months / 12).toFixed(1)} years merged)
-                </p>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-                  Verified Sales Experience
-                </span>
-                <p className="text-2xl font-bold text-slate-900 mt-1">
-                  {verifiedExp.sales_experience_months} <span className="text-sm font-normal text-slate-500">months</span>
-                </p>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  Input: <code className="text-xs font-mono text-slate-600">sales_experience_months</code>
-                </p>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-                  Verified Customer Service
-                </span>
-                <p className="text-2xl font-bold text-slate-900 mt-1">
-                  {verifiedExp.customer_service_experience_months} <span className="text-sm font-normal text-slate-500">months</span>
-                </p>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  Input: <code className="text-xs font-mono text-slate-600">customer_service_experience_months</code>
-                </p>
-              </div>
-            </div>
-
-            {/* Experience Records List */}
-            <div className="space-y-3">
-              {experiences.length > 0 ? (
-                experiences.map((exp) => (
-                  <div 
-                    key={exp.experience_id} 
-                    className="p-4 rounded-xl border border-slate-200/80 hover:border-slate-300 transition-colors bg-white shadow-2xs"
-                  >
-                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-                      <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <h4 className="text-sm font-bold text-slate-900">{exp.job_title}</h4>
-                          <span className="text-xs text-slate-400">&bull;</span>
-                          <span className="text-xs font-semibold text-slate-700">{exp.company}</span>
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                            {exp.work_category}
-                          </span>
-                        </div>
-
-                        <div className="flex items-center gap-2 text-xs text-slate-500 mt-1 flex-wrap">
-                          <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                          <span>
-                            {exp.start_date} &rarr; {exp.is_current ? 'Present (Current Role)' : (exp.end_date || 'Ongoing')}
-                          </span>
-                        </div>
-
-                        {exp.description && (
-                          <p className="text-xs text-slate-600 mt-2 leading-relaxed">
-                            {exp.description}
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="flex sm:flex-col items-end justify-between sm:justify-start gap-2 shrink-0">
-                        {renderVerificationBadge(
-                          exp.verification_status, 
-                          exp.rejection_reason, 
-                          exp.reviewer_name, 
-                          exp.reviewed_at
-                        )}
-
-                        {/* Allow deleting pending or rejected records */}
-                        {exp.verification_status !== 'VERIFIED' && (
-                          <button
-                            type="button"
-                            onClick={() => setDeleteDialog({
-                              isOpen: true,
-                              type: 'experience',
-                              id: exp.experience_id,
-                              title: `${exp.job_title} at ${exp.company}`
-                            })}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
-                            title="Withdraw/Delete this entry"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="p-8 text-center border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
-                  <Briefcase className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                  <p className="text-sm font-semibold text-slate-700">No work experience submitted</p>
-                  <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                    Add past roles to build verified experience months and unlock tasks that require domain experience.
-                  </p>
-                  <Button 
-                    size="sm" 
-                    variant="secondary"
-                    onClick={() => setIsAddExpOpen(true)}
-                    className="mt-3"
-                  >
-                    + Add Your First Role
-                  </Button>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* ================================================================= */}
-          {/* SECTION 4: CERTIFICATIONS & CREDENTIALS */}
-          {/* ================================================================= */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-8 shadow-xs space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
-              <div>
-                <div className="flex items-center gap-2">
-                  <Award className="w-5 h-5 text-[#3B50BA]" />
-                  <h2 className="text-lg font-bold text-slate-900">Professional Certifications &amp; Credentials</h2>
-                </div>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Verified certifications satisfy mandatory task requirements and add leverage to ML competency scores.
-                </p>
-              </div>
-
-              <Button 
-                size="sm" 
-                onClick={() => setIsAddCertOpen(true)}
-                className="flex items-center gap-1.5 shrink-0"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Certification</span>
-              </Button>
-            </div>
-
-            {/* Verified Certifications Summary */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-                  Verified Credentials Count
-                </span>
-                <p className="text-2xl font-bold text-slate-900 mt-1">
-                  {verifiedCerts.certification_count} <span className="text-sm font-normal text-slate-500">active</span>
-                </p>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  Input: <code className="text-xs font-mono text-slate-600">certification_count</code>
-                </p>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-                  Domain Relevant Certification
-                </span>
-                <div className="mt-1 flex items-center gap-2">
-                  <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${verifiedCerts.relevant_certification ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
-                    {verifiedCerts.relevant_certification ? 'Domain Qualified (1)' : 'Standard (0)'}
+                <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52]">
+                  <span className="text-[11px] font-semibold text-[#8d97b8] uppercase tracking-wider block">
+                    Verified Sales Experience
                   </span>
+                  <p className="text-2xl font-bold text-white mt-1">
+                    {verifiedExp.sales_experience_months} <span className="text-xs font-normal text-slate-400">months</span>
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Input: <code className="text-xs font-mono text-indigo-300">sales_experience_months</code>
+                  </p>
                 </div>
-                <p className="text-[11px] text-slate-400 mt-1">
-                  Input: <code className="text-xs font-mono text-slate-600">relevant_certification</code>
-                </p>
+
+                <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52]">
+                  <span className="text-[11px] font-semibold text-[#8d97b8] uppercase tracking-wider block">
+                    Verified Customer Service
+                  </span>
+                  <p className="text-2xl font-bold text-white mt-1">
+                    {verifiedExp.customer_service_experience_months} <span className="text-xs font-normal text-slate-400">months</span>
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Input: <code className="text-xs font-mono text-indigo-300">customer_service_experience_months</code>
+                  </p>
+                </div>
               </div>
 
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-                  Certified Leverage Multiplier
-                </span>
-                <p className="text-2xl font-bold text-slate-900 mt-1">
-                  {verifiedCerts.certified_leverage}
-                </p>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  Input: <code className="text-xs font-mono text-slate-600">certified_leverage</code>
-                </p>
-              </div>
-            </div>
-
-            {/* Certifications List */}
-            <div className="space-y-3">
-              {certifications.length > 0 ? (
-                certifications.map((cert) => (
-                  <div 
-                    key={cert.agent_cert_id} 
-                    className="p-4 rounded-xl border border-slate-200/80 hover:border-slate-300 transition-colors bg-white shadow-2xs"
-                  >
-                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-                      <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <h4 className="text-sm font-bold text-slate-900">{cert.certification_name}</h4>
-                          {cert.issuing_organization && (
-                            <span className="text-xs font-semibold text-slate-600">
-                              &bull; {cert.issuing_organization}
+              {/* Experience Records List */}
+              <div className="space-y-3 pt-2">
+                {experiences.length > 0 ? (
+                  experiences.map((exp, idx) => (
+                    <div 
+                      key={exp.experience_id || `exp-${idx}`} 
+                      className="p-4 rounded-xl border border-[#232f52] hover:border-indigo-500/50 transition-colors bg-[#0e162d]/80"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="text-sm font-bold text-white">{exp.job_title}</h4>
+                            <span className="text-xs text-slate-500">&bull;</span>
+                            <span className="text-xs font-semibold text-slate-300">{exp.company}</span>
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-950/60 text-indigo-300 border border-indigo-500/40">
+                              {exp.work_category}
                             </span>
-                          )}
-                        </div>
-
-                        <div className="flex items-center gap-3 text-xs text-slate-500 mt-1 flex-wrap">
-                          {cert.certificate_number && (
-                            <span>ID: <strong className="font-mono text-slate-700">{cert.certificate_number}</strong></span>
-                          )}
-                          <span>Issued: {cert.issue_date}</span>
-                          {cert.expiry_date ? (
-                            <span>Expires: {cert.expiry_date}</span>
-                          ) : (
-                            <span className="text-slate-400">No Expiration</span>
-                          )}
-                        </div>
-
-                        {cert.credential_url && (
-                          <div className="mt-2">
-                            <a 
-                              href={cert.credential_url} 
-                              target="_blank" 
-                              rel="noopener noreferrer" 
-                              className="inline-flex items-center gap-1 text-xs font-semibold text-[#3B50BA] hover:underline"
-                            >
-                              <span>Verify Credential Online</span>
-                              <ExternalLink className="w-3 h-3" />
-                            </a>
                           </div>
-                        )}
-                      </div>
 
-                      <div className="flex sm:flex-col items-end justify-between sm:justify-start gap-2 shrink-0">
-                        {renderVerificationBadge(
-                          cert.status, 
-                          cert.rejection_reason, 
-                          cert.reviewer_name, 
-                          cert.reviewed_at
-                        )}
+                          <div className="flex items-center gap-2 text-xs text-slate-400 mt-1 flex-wrap">
+                            <Calendar className="w-3.5 h-3.5 text-slate-500" />
+                            <span>
+                              {formatDate(exp.start_date)} &rarr; {exp.is_current ? 'Present (Current Role)' : (formatDate(exp.end_date) || 'Ongoing')}
+                            </span>
+                          </div>
 
-                        {cert.status !== 'VERIFIED' && (
-                          <button
-                            type="button"
-                            onClick={() => setDeleteDialog({
-                              isOpen: true,
-                              type: 'certification',
-                              id: cert.agent_cert_id,
-                              title: cert.certification_name
-                            })}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
-                            title="Withdraw/Delete this certification"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
+                          {exp.description && (
+                            <p className="text-xs text-slate-300 mt-2 leading-relaxed">
+                              {exp.description}
+                            </p>
+                          )}
+
+                          {/* Supervisor Reference Details */}
+                          {(exp.supervisor_name || exp.supervisor_email || exp.supervisor_phone) && (
+                            <div className="mt-2.5 pt-2 border-t border-[#1b2542] flex flex-wrap items-center justify-between gap-2 text-xs">
+                              <div className="flex items-center gap-1.5 text-slate-400">
+                                <UserCheck className="w-3.5 h-3.5 text-indigo-400" />
+                                <span>
+                                  Employer Contact: <strong className="text-slate-200">{exp.supervisor_name || 'Former Manager'}</strong>
+                                  {exp.supervisor_email && ` • ${exp.supervisor_email}`}
+                                  {exp.supervisor_phone && ` • ${exp.supervisor_phone}`}
+                                </span>
+                              </div>
+
+                              {(exp.verification_status || exp.status) !== 'VERIFIED' && exp.supervisor_email && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleResendSupervisor(exp.experience_id)}
+                                  className="text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 hover:underline flex items-center gap-1 cursor-pointer"
+                                >
+                                  <Send className="w-3 h-3" />
+                                  <span>Resend Verification Link</span>
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex sm:flex-col items-end justify-between sm:justify-start gap-2 shrink-0">
+                          {renderVerificationBadge(
+                            exp.verification_status || exp.status, 
+                            exp.rejection_reason, 
+                            exp.reviewer_name
+                          )}
+
+                          {(exp.verification_status || exp.status) !== 'VERIFIED' && (
+                            <button
+                              type="button"
+                              onClick={() => setDeleteDialog({
+                                isOpen: true,
+                                type: 'experience',
+                                id: exp.experience_id,
+                                title: `${exp.job_title} at ${exp.company}`
+                              })}
+                              className="p-1.5 text-slate-400 hover:text-rose-400 rounded-lg hover:bg-rose-950/40 transition-colors cursor-pointer"
+                              title="Withdraw/Delete this experience"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
+                  ))
+                ) : (
+                  <div className="p-8 text-center border border-dashed border-[#232f52] rounded-xl bg-[#0c1224]">
+                    <Briefcase className="w-8 h-8 text-slate-500 mx-auto mb-2" />
+                    <p className="text-sm font-semibold text-slate-300">No verified work experiences submitted yet</p>
+                    <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                      Add your past sales or client support roles to earn verified tenure months for automated task allocation.
+                    </p>
+                    <button 
+                      type="button"
+                      onClick={() => setIsAddExpOpen(true)}
+                      className="mt-3 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-indigo-950/60 text-indigo-300 border border-indigo-500/40 hover:bg-indigo-900/60 cursor-pointer"
+                    >
+                      + Add Work Experience
+                    </button>
                   </div>
-                ))
-              ) : (
-                <div className="p-8 text-center border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
-                  <Award className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                  <p className="text-sm font-semibold text-slate-700">No certifications submitted yet</p>
-                  <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                    Submit your professional licenses or training credentials to satisfy task requirements and boost model evaluation scores.
-                  </p>
-                  <Button 
-                    size="sm" 
-                    variant="secondary"
-                    onClick={() => setIsAddCertOpen(true)}
-                    className="mt-3"
-                  >
-                    + Submit a Certification
-                  </Button>
-                </div>
-              )}
+                )}
+              </div>
             </div>
-          </div>
+          )}
 
+          {/* ================================================================= */}
+          {/* TAB 3: CERTIFICATIONS CARD */}
+          {/* ================================================================= */}
+          {activeTab === 'certifications' && (
+            <div className="bg-[#0b1020]/90 border border-[#24335c]/80 rounded-2xl p-6 sm:p-8 shadow-[0_0_30px_rgba(15,23,42,0.8)] backdrop-blur-xl space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-[#1b2542]">
+                <div>
+                  <h2 className="text-lg font-bold font-sora text-white">Professional Certifications</h2>
+                  <p className="text-xs text-[#8d97b8] mt-0.5">
+                    Credentials submitted here are verified against issuer registers. Verified certifications satisfy mandatory task requirements.
+                  </p>
+                </div>
+
+                <button 
+                  type="button"
+                  onClick={() => setIsAddCertOpen(true)}
+                  className="px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-[0_0_15px_rgba(59,130,246,0.4)] hover:brightness-110 transition-all flex items-center gap-1.5 shrink-0 cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Add Certification</span>
+                </button>
+              </div>
+
+              {/* Verified Certifications Metric Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52]">
+                  <span className="text-[11px] font-semibold text-[#8d97b8] uppercase tracking-wider block">
+                    Total Certifications
+                  </span>
+                  <p className="text-2xl font-bold text-white mt-1">
+                    {verifiedCerts.certification_count}
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Verified and active credentials
+                  </p>
+                </div>
+
+                <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52]">
+                  <span className="text-[11px] font-semibold text-[#8d97b8] uppercase tracking-wider block">
+                    Domain Relevant Certification
+                  </span>
+                  <div className="mt-1 flex items-center gap-2">
+                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
+                      verifiedCerts.relevant_certification 
+                        ? 'bg-emerald-950/60 text-emerald-400 border-emerald-500/40' 
+                        : 'bg-slate-900 text-slate-400 border-slate-700'
+                    }`}>
+                      {verifiedCerts.relevant_certification ? 'Domain Qualified (1)' : 'Standard (0)'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Input: <code className="text-xs font-mono text-indigo-300">relevant_certification</code>
+                  </p>
+                </div>
+
+                <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52]">
+                  <span className="text-[11px] font-semibold text-[#8d97b8] uppercase tracking-wider block">
+                    Certified Leverage Multiplier
+                  </span>
+                  <p className="text-2xl font-bold text-white mt-1">
+                    {verifiedCerts.certified_leverage}
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Input: <code className="text-xs font-mono text-indigo-300">certified_leverage</code>
+                  </p>
+                </div>
+              </div>
+
+              {/* Certifications List */}
+              <div className="space-y-3 pt-2">
+                {certifications.length > 0 ? (
+                  certifications.map((cert, idx) => (
+                    <div 
+                      key={cert.agent_certification_id || cert.agent_cert_id || cert.certificate_number || `cert-${idx}`}
+                      className="p-4 rounded-xl border border-[#232f52] hover:border-indigo-500/50 transition-colors bg-[#0e162d]/80"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="text-sm font-bold text-white">{cert.certification_name}</h4>
+                            {cert.issuing_organization && (
+                              <span className="text-xs font-semibold text-slate-400">
+                                &bull; {cert.issuing_organization}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-3 text-xs text-slate-400 mt-1 flex-wrap">
+                            {cert.certificate_number && (
+                              <span>ID: <strong className="font-mono text-slate-300">{cert.certificate_number}</strong></span>
+                            )}
+                            <span>Issued: {formatDate(cert.issue_date)}</span>
+                            {cert.expiry_date ? (
+                              <span>Expires: {formatDate(cert.expiry_date)}</span>
+                            ) : (
+                              <span className="text-slate-500">No Expiration</span>
+                            )}
+                          </div>
+
+                          {cert.credential_url && (
+                            <div className="mt-2">
+                              <a 
+                                href={cert.credential_url} 
+                                target="_blank" 
+                                rel="noopener noreferrer" 
+                                className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-400 hover:text-indigo-300 hover:underline"
+                              >
+                                <span>Verify Credential Online</span>
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex sm:flex-col items-end justify-between sm:justify-start gap-2 shrink-0">
+                          {renderVerificationBadge(
+                            cert.status, 
+                            cert.rejection_reason, 
+                            cert.reviewer_name
+                          )}
+
+                          {cert.status !== 'VERIFIED' && (
+                            <button
+                              type="button"
+                              onClick={() => setDeleteDialog({
+                                isOpen: true,
+                                type: 'certification',
+                                id: cert.agent_certification_id || cert.agent_cert_id,
+                                title: cert.certification_name
+                              })}
+                              className="p-1.5 text-slate-400 hover:text-rose-400 rounded-lg hover:bg-rose-950/40 transition-colors cursor-pointer"
+                              title="Withdraw/Delete this certification"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="p-8 text-center border border-dashed border-[#232f52] rounded-xl bg-[#0c1224]">
+                    <Award className="w-8 h-8 text-slate-500 mx-auto mb-2" />
+                    <p className="text-sm font-semibold text-slate-300">No certifications submitted yet</p>
+                    <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                      Submit your professional licenses or training credentials to satisfy task requirements and boost model evaluation scores.
+                    </p>
+                    <button 
+                      type="button"
+                      onClick={() => setIsAddCertOpen(true)}
+                      className="mt-3 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-indigo-950/60 text-indigo-300 border border-indigo-500/40 hover:bg-indigo-900/60 cursor-pointer"
+                    >
+                      + Submit a Certification
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </main>
       </div>
 
@@ -1116,17 +1427,17 @@ export const ProfilePage = () => {
       {/* MODAL: ADD WORK EXPERIENCE */}
       {/* ================================================================= */}
       {isAddExpOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-slate-100 p-6 sm:p-7 relative max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-[#0d1428] rounded-2xl shadow-2xl border border-[#2b3a67] p-6 sm:p-7 relative max-h-[90vh] overflow-y-auto text-white">
+            <div className="flex items-center justify-between pb-3 border-b border-[#1b2542]">
               <div className="flex items-center gap-2">
-                <Briefcase className="w-5 h-5 text-[#3B50BA]" />
-                <h3 className="text-lg font-bold text-slate-900">Add Work Experience</h3>
+                <Briefcase className="w-5 h-5 text-indigo-400" />
+                <h3 className="text-lg font-bold font-sora text-white">Add Work Experience</h3>
               </div>
               <button
                 type="button"
                 onClick={() => setIsAddExpOpen(false)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+                className="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1134,41 +1445,41 @@ export const ProfilePage = () => {
 
             <form onSubmit={handleAddExperience} className="space-y-4 mt-4 text-xs sm:text-sm">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Job Title <span className="text-rose-500">*</span>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Job Title <span className="text-rose-400">*</span>
                 </label>
                 <input 
                   type="text"
                   value={expForm.job_title}
                   onChange={(e) => setExpForm({ ...expForm, job_title: e.target.value })}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA]"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white focus:outline-none focus:border-[#5a69f0]"
                   placeholder="e.g. Senior Sales Specialist"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Company / Organization <span className="text-rose-500">*</span>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Company / Organization <span className="text-rose-400">*</span>
                 </label>
                 <input 
                   type="text"
                   value={expForm.company}
                   onChange={(e) => setExpForm({ ...expForm, company: e.target.value })}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA]"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white focus:outline-none focus:border-[#5a69f0]"
                   placeholder="e.g. Apex Global Solutions"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Work Category <span className="text-rose-500">*</span>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Work Category <span className="text-rose-400">*</span>
                 </label>
                 <select
                   value={expForm.work_category}
                   onChange={(e) => setExpForm({ ...expForm, work_category: e.target.value })}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:border-[#3B50BA]"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white focus:outline-none focus:border-[#5a69f0]"
                 >
                   <option value="Sales">Sales &amp; Business Development</option>
                   <option value="Customer Service">Customer Service &amp; Support</option>
@@ -1181,20 +1492,20 @@ export const ProfilePage = () => {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Start Date <span className="text-rose-500">*</span>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Start Date <span className="text-rose-400">*</span>
                   </label>
                   <input 
                     type="date"
                     value={expForm.start_date}
                     onChange={(e) => setExpForm({ ...expForm, start_date: e.target.value })}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA]"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white focus:outline-none focus:border-[#5a69f0]"
                     required
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
                     End Date
                   </label>
                   <input 
@@ -1202,7 +1513,7 @@ export const ProfilePage = () => {
                     value={expForm.end_date}
                     disabled={expForm.is_current}
                     onChange={(e) => setExpForm({ ...expForm, end_date: e.target.value })}
-                    className={`w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA] ${expForm.is_current ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : ''}`}
+                    className={`w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white focus:outline-none focus:border-[#5a69f0] ${expForm.is_current ? 'opacity-40 cursor-not-allowed' : ''}`}
                     required={!expForm.is_current}
                   />
                 </div>
@@ -1214,47 +1525,99 @@ export const ProfilePage = () => {
                   id="is_current"
                   checked={expForm.is_current}
                   onChange={(e) => setExpForm({ ...expForm, is_current: e.target.checked, end_date: e.target.checked ? '' : expForm.end_date })}
-                  className="w-4 h-4 rounded text-[#3B50BA] focus:ring-[#3B50BA] border-slate-300"
+                  className="w-4 h-4 rounded text-indigo-500 focus:ring-indigo-500 bg-[#080d1c] border-[#232f52]"
                 />
-                <label htmlFor="is_current" className="text-xs font-medium text-slate-700 cursor-pointer">
+                <label htmlFor="is_current" className="text-xs font-medium text-slate-300 cursor-pointer">
                   I currently work in this role
                 </label>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
                   Role Description &amp; Responsibilities
                 </label>
                 <textarea 
                   rows={3}
                   value={expForm.description}
                   onChange={(e) => setExpForm({ ...expForm, description: e.target.value })}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA]"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white focus:outline-none focus:border-[#5a69f0]"
                   placeholder="Summarize key tasks, quotas, deliverables, or customer interactions handled..."
                 />
               </div>
 
-              <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-start gap-2">
-                <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <span>
-                  Submitted roles enter the <strong>Pending Verification</strong> status and are reviewed by administrators before being credited to your verified months.
-                </span>
+              {/* Supervisor / HR Reference Section */}
+              <div className="p-3.5 rounded-xl bg-[#080d1c] border border-[#232f52] space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-white">
+                    <UserCheck className="w-4 h-4 text-indigo-400" />
+                    <span>Former Supervisor / Manager Reference <span className="text-rose-400">*</span></span>
+                  </div>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-rose-950/60 text-rose-300 border border-rose-500/40">
+                    Mandatory
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-normal">
+                  Provide your former manager or employer's contact details. Administrators will contact them via email or phone to confirm your role and tenure before approving.
+                </p>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                    Supervisor / Manager Name <span className="text-rose-400">*</span>
+                  </label>
+                  <input 
+                    type="text"
+                    required
+                    value={expForm.supervisor_name}
+                    onChange={(e) => setExpForm({ ...expForm, supervisor_name: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg bg-[#0e162d] border border-[#232f52] text-xs text-white focus:outline-none focus:border-[#5a69f0]"
+                    placeholder="e.g. Sarah Jenkins (Direct Manager)"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                      Supervisor Corporate Email <span className="text-rose-400">*</span>
+                    </label>
+                    <input 
+                      type="email"
+                      required
+                      value={expForm.supervisor_email}
+                      onChange={(e) => setExpForm({ ...expForm, supervisor_email: e.target.value })}
+                      className="w-full px-3 py-2 rounded-lg bg-[#0e162d] border border-[#232f52] text-xs text-white focus:outline-none focus:border-[#5a69f0]"
+                      placeholder="e.g. s.jenkins@company.com"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                      Supervisor Phone <span className="text-slate-400 font-normal">(Optional)</span>
+                    </label>
+                    <input 
+                      type="tel"
+                      value={expForm.supervisor_phone}
+                      onChange={(e) => setExpForm({ ...expForm, supervisor_phone: e.target.value })}
+                      className="w-full px-3 py-2 rounded-lg bg-[#0e162d] border border-[#232f52] text-xs text-white focus:outline-none focus:border-[#5a69f0]"
+                      placeholder="e.g. +254 711 223344"
+                    />
+                  </div>
+                </div>
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
-                <Button 
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#1b2542]">
+                <button 
                   type="button" 
-                  variant="ghost" 
                   onClick={() => setIsAddExpOpen(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white cursor-pointer"
                 >
                   Cancel
-                </Button>
-                <Button 
+                </button>
+                <button 
                   type="submit" 
                   disabled={isSavingExp}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-[0_0_15px_rgba(59,130,246,0.5)] cursor-pointer disabled:opacity-50"
                 >
                   {isSavingExp ? 'Submitting...' : 'Submit for Verification'}
-                </Button>
+                </button>
               </div>
             </form>
           </div>
@@ -1265,17 +1628,17 @@ export const ProfilePage = () => {
       {/* MODAL: ADD CERTIFICATION */}
       {/* ================================================================= */}
       {isAddCertOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-slate-100 p-6 sm:p-7 relative max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-[#0d1428] rounded-2xl shadow-2xl border border-[#2b3a67] p-6 sm:p-7 relative max-h-[90vh] overflow-y-auto text-white">
+            <div className="flex items-center justify-between pb-3 border-b border-[#1b2542]">
               <div className="flex items-center gap-2">
-                <Award className="w-5 h-5 text-[#3B50BA]" />
-                <h3 className="text-lg font-bold text-slate-900">Add Professional Certification</h3>
+                <Award className="w-5 h-5 text-indigo-400" />
+                <h3 className="text-lg font-bold font-sora text-white">Add Professional Certification</h3>
               </div>
               <button
                 type="button"
                 onClick={() => setIsAddCertOpen(false)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+                className="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1283,55 +1646,55 @@ export const ProfilePage = () => {
 
             <form onSubmit={handleAddCertification} className="space-y-4 mt-4 text-xs sm:text-sm">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Certification Name <span className="text-rose-500">*</span>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Certification Name <span className="text-rose-400">*</span>
                 </label>
                 <input 
                   type="text"
                   value={certForm.certification_name}
                   onChange={(e) => setCertForm({ ...certForm, certification_name: e.target.value })}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA]"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white focus:outline-none focus:border-[#5a69f0]"
                   placeholder="e.g. HubSpot Inbound Sales Certified"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
                   Issuing Organization
                 </label>
                 <input 
                   type="text"
                   value={certForm.issuing_organization}
                   onChange={(e) => setCertForm({ ...certForm, issuing_organization: e.target.value })}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA]"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white focus:outline-none focus:border-[#5a69f0]"
                   placeholder="e.g. HubSpot Academy, Google, AWS"
                 />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
                     Credential / License ID
                   </label>
                   <input 
                     type="text"
                     value={certForm.certificate_number}
                     onChange={(e) => setCertForm({ ...certForm, certificate_number: e.target.value })}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm font-mono focus:outline-none focus:border-[#3B50BA]"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white font-mono focus:outline-none focus:border-[#5a69f0]"
                     placeholder="e.g. HS-CERT-98214"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
                     Verification URL
                   </label>
                   <input 
                     type="url"
                     value={certForm.credential_url}
                     onChange={(e) => setCertForm({ ...certForm, credential_url: e.target.value })}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA]"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white focus:outline-none focus:border-[#5a69f0]"
                     placeholder="https://..."
                   />
                 </div>
@@ -1339,52 +1702,46 @@ export const ProfilePage = () => {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Issue Date <span className="text-rose-500">*</span>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Issue Date <span className="text-rose-400">*</span>
                   </label>
                   <input 
                     type="date"
                     value={certForm.issue_date}
                     onChange={(e) => setCertForm({ ...certForm, issue_date: e.target.value })}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA]"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white focus:outline-none focus:border-[#5a69f0]"
                     required
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
                     Expiration Date <span className="text-slate-400 font-normal">(optional)</span>
                   </label>
                   <input 
                     type="date"
                     value={certForm.expiry_date}
                     onChange={(e) => setCertForm({ ...certForm, expiry_date: e.target.value })}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA]"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white focus:outline-none focus:border-[#5a69f0]"
                   />
                 </div>
               </div>
 
-              <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-start gap-2">
-                <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <span>
-                  Admin reviewers verify the credential link and issuing authority before marking it <strong>VERIFIED</strong>.
-                </span>
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
-                <Button 
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#1b2542]">
+                <button 
                   type="button" 
-                  variant="ghost" 
                   onClick={() => setIsAddCertOpen(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white cursor-pointer"
                 >
                   Cancel
-                </Button>
-                <Button 
+                </button>
+                <button 
                   type="submit" 
                   disabled={isSavingCert}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-[0_0_15px_rgba(59,130,246,0.5)] cursor-pointer disabled:opacity-50"
                 >
                   {isSavingCert ? 'Submitting...' : 'Submit Certification'}
-                </Button>
+                </button>
               </div>
             </form>
           </div>
@@ -1395,37 +1752,36 @@ export const ProfilePage = () => {
       {/* DIALOG: CONFIRM DELETE */}
       {/* ================================================================= */}
       {deleteDialog.isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl border border-slate-100 p-6 relative">
-            <div className="w-10 h-10 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mb-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-sm bg-[#0d1428] rounded-2xl shadow-2xl border border-[#2b3a67] p-6 relative text-white">
+            <div className="w-10 h-10 rounded-full bg-rose-950/60 text-rose-400 border border-rose-500/40 flex items-center justify-center mb-3">
               <Trash2 className="w-5 h-5" />
             </div>
-            <h4 className="text-base font-bold text-slate-900">Withdraw Submission?</h4>
-            <p className="text-xs text-slate-600 mt-1">
-              Are you sure you want to remove <strong className="text-slate-800">"{deleteDialog.title}"</strong>? 
+            <h4 className="text-base font-bold font-sora text-white">Withdraw Submission?</h4>
+            <p className="text-xs text-slate-300 mt-1">
+              Are you sure you want to remove <strong className="text-white">&quot;{deleteDialog.title}&quot;</strong>? 
               This will withdraw it from the verification queue.
             </p>
             <div className="flex items-center justify-end gap-2.5 mt-5">
-              <Button 
-                variant="ghost" 
-                size="sm"
+              <button 
+                type="button"
                 onClick={() => setDeleteDialog({ isOpen: false, type: null, id: null, title: '' })}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white cursor-pointer"
               >
                 Cancel
-              </Button>
-              <Button 
-                size="sm"
+              </button>
+              <button 
+                type="button"
+                disabled={isDeleting}
                 onClick={handleConfirmDelete}
-                className="bg-rose-600 hover:bg-rose-700 text-white"
+                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white shadow-md disabled:opacity-50 cursor-pointer"
               >
-                Confirm Delete
-              </Button>
+                {isDeleting ? 'Removing...' : 'Confirm Delete'}
+              </button>
             </div>
           </div>
         </div>
       )}
-
-
     </div>
   );
 };

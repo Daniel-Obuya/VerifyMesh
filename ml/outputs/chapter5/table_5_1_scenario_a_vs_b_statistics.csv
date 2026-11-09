@@ -1,0 +1,16 @@
+Dataset Metric,Scenario A (Balanced Compensatory),Scenario B (Strict Bottleneck / Weakest-Link)
+Number of applicants,800,"3,200"
+Number of tasks,30,30
+Number of task categories,5,5
+Number of difficulty tiers,3,3
+Number of initial applicant-task pairs,"6,000","24,000"
+Number of eligible applicant-task pairs (Stage 1 Pass),"1,183 (19.72%)","4,675 (19.48%)"
+Number of ineligible pairs (Stage 1 Fail),"4,817 (80.28%)","19,325 (80.52%)"
+Number of unique eligible applicants,503 / 800 (62.88%),"1,924 / 3,200 (60.12%)"
+Number of eligible tasks represented,29 / 30 (96.7%),30 / 30 (100.0%)
+Number of successful outcomes (Eligible Stage 2 Cohort),786,"2,927"
+Number of unsuccessful outcomes (Eligible Stage 2 Cohort),397,"1,748"
+Positive class percentage (Eligible Stage 2 Cohort),66.44%,62.61%
+Negative class percentage (Eligible Stage 2 Cohort),33.56%,37.39%
+Number of successful outcomes (All Initial Pairs),"2,213 (36.88%)","5,868 (24.45%)"
+Number of unsuccessful outcomes (All Initial Pairs),"3,787 (63.12%)","18,132 (75.55%)"

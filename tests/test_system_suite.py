@@ -50,7 +50,8 @@ from backend.db import (
     DECISION_TO_ENUM,
     ENUM_TO_DECISION
 )
-from src.inference import inference_engine
+from src.task_suitability_inference import task_suitability_engine
+from src.stage2_feature_engineering import STAGE2_V2_FEATURES
 
 
 class SystemTestingBase(unittest.TestCase):
@@ -101,6 +102,13 @@ class SystemTestingBase(unittest.TestCase):
             "15": "A",
             "16": "B",
             "17": "D"  # Incorrect
+        }
+        cls.failing_answers = {
+            "13": "D",
+            "14": "D",
+            "15": "D",
+            "16": "D",
+            "17": "D"
         }
 
     def setUp(self):
@@ -378,86 +386,64 @@ class TestCategoryB_CompetencyAssessments(SystemTestingBase):
 class TestCategoryC_MachineLearning(SystemTestingBase):
 
     def test_TC009_inference_returns_valid_decision_classes(self):
-        """TC009: Submit valid feature profiles and verify inference returns supported decision classes."""
+        """TC009: Submit valid Stage 2 feature profiles and verify inference returns supported decision classes and tiers."""
         valid_profile = {
-            "previous_experience_months": 24.0,
-            "sales_experience_months": 18.0,
-            "customer_service_experience_months": 12.0,
-            "certification_count": 2.0,
-            "relevant_certification": 1.0,
-            "assessment_score": 85.0,
-            "communication_score": 82.0,
-            "product_knowledge_score": 80.0,
-            "sales_skill_score": 84.0,
-            "customer_service_score": 86.0
+            "weighted_skill_margin": 15.0,
+            "min_skill_margin": 5.0,
+            "weakest_link_deficit": 0.0,
+            "exp_surplus_tanh": 0.85,
+            "difficulty_tier": 2.0
         }
 
-        result = inference_engine.predict(valid_profile)
-        self.assertIn("decision", result)
-        self.assertIn("confidence", result)
+        result = task_suitability_engine.predict(valid_profile)
+        self.assertIn("suitability_score", result)
+        self.assertIn("predicted_class", result)
+        self.assertIn("advisory_tier", result)
         self.assertIn("probabilities", result)
 
-        # Decision must be one of the two supported model output codes: '0', '1'
-        self.assertIn(str(result["decision"]), ["0", "1"])
-        self.assertGreaterEqual(result["confidence"], 0.0)
-        self.assertLessEqual(result["confidence"], 1.0)
-        self.assertAlmostEqual(sum(result["probabilities"].values()), 1.0, places=2)
+        # Decision must be one of the two supported model output classes: 0, 1
+        self.assertIn(result["predicted_class"], [0, 1])
+        self.assertGreaterEqual(result["suitability_score"], 0.0)
+        self.assertLessEqual(result["suitability_score"], 1.0)
+        self.assertAlmostEqual(result["p_suitable"] + result["p_not_suitable"], 1.0, places=2)
 
     def test_TC010_input_feature_ordering_types_and_preprocessing(self):
-        """TC010: Verify 11-feature contract, feature ordering, and certified_leverage derivation."""
-        # Expected exact 11 input features in order
-        expected_raw_features = [
-            "previous_experience_months",
-            "sales_experience_months",
-            "customer_service_experience_months",
-            "certification_count",
-            "relevant_certification",
-            "assessment_score",
-            "communication_score",
-            "product_knowledge_score",
-            "sales_skill_score",
-            "customer_service_score",
-            "certified_leverage"
+        """TC010: Verify 5-feature contract, canonical feature names, and feature ordering."""
+        expected_features = [
+            "weighted_skill_margin",
+            "min_skill_margin",
+            "weakest_link_deficit",
+            "exp_surplus_tanh",
+            "difficulty_tier"
         ]
-        self.assertEqual(inference_engine.EXPECTED_FEATURES, expected_raw_features)
-        self.assertEqual(len(inference_engine.ENGINEERED_FEATURES), 15)
+        self.assertEqual(task_suitability_engine.FEATURE_NAMES, expected_features)
+        self.assertEqual(STAGE2_V2_FEATURES, expected_features)
+        self.assertEqual(len(task_suitability_engine.FEATURE_NAMES), 5)
 
-        # Test automatic derivation of certified_leverage formula:
-        # certified_leverage = certification_count * (1 + relevant_certification)
-        cert_count = 3.0
-        rel_cert = 1.0
-        expected_leverage = cert_count * (1.0 + rel_cert)  # 6.0
-
-        raw_input = {
-            "previous_experience_months": 30.0,
-            "sales_experience_months": 20.0,
-            "customer_service_experience_months": 10.0,
-            "certification_count": cert_count,
-            "relevant_certification": rel_cert,
-            "assessment_score": 90.0,
-            "communication_score": 90.0,
-            "product_knowledge_score": 90.0,
-            "sales_skill_score": 90.0,
-            "customer_service_score": 90.0
-        }
-        res = inference_engine.predict(raw_input)
+        # Verify inference runs with valid feature vector
+        res = task_suitability_engine.predict({
+            "weighted_skill_margin": 20.0,
+            "min_skill_margin": 10.0,
+            "weakest_link_deficit": 0.0,
+            "exp_surplus_tanh": 0.95,
+            "difficulty_tier": 2.0
+        })
         self.assertIsNotNone(res)
+        self.assertEqual(res["advisory_tier"], "Strong Fit")
 
     def test_TC011_decision_class_to_application_labels_mapping(self):
-        """TC011: Verify that model output classes are mapped correctly to application labels."""
-        # Class 0: Not Eligible
-        self.assertEqual(DECISION_TO_ENUM["0"], "NOT_ELIGIBLE")
+        """TC011: Verify that model advisory tiers and platform competency labels are mapped correctly."""
+        # Advisory threshold checks
+        trace = task_suitability_engine.get_traceability_metadata()
+        self.assertEqual(trace["applied_threshold"], 0.60)
+        self.assertEqual(trace["moderate_threshold"], 0.48)
+        self.assertIn("strong_fit", trace["advisory_tiers"])
+        self.assertIn("moderate_fit", trace["advisory_tiers"])
+        self.assertIn("needs_review", trace["advisory_tiers"])
+
+        # Platform-level competency enums
         self.assertEqual(COMPETENCY_ENUM_TO_LABEL["NOT_ELIGIBLE"], "Not Eligible")
-        self.assertEqual(ENUM_TO_DECISION["NOT_ELIGIBLE"]["label"], "Not Eligible")
-        self.assertEqual(ENUM_TO_DECISION["NOT_ELIGIBLE"]["code"], 0)
-
-        # Class 1: Eligible
-        self.assertEqual(DECISION_TO_ENUM["1"], "ELIGIBLE")
         self.assertEqual(COMPETENCY_ENUM_TO_LABEL["ELIGIBLE"], "Eligible")
-        self.assertEqual(ENUM_TO_DECISION["ELIGIBLE"]["label"], "Eligible")
-        self.assertEqual(ENUM_TO_DECISION["ELIGIBLE"]["code"], 1)
-
-        # Backward-compatible enum labels mapped to binary outcomes
         self.assertEqual(COMPETENCY_ENUM_TO_LABEL["COMPETENT"], "Eligible")
         self.assertEqual(COMPETENCY_ENUM_TO_LABEL["ADVANCED"], "Eligible")
         self.assertEqual(COMPETENCY_ENUM_TO_LABEL["BASIC"], "Not Eligible")
@@ -465,32 +451,27 @@ class TestCategoryC_MachineLearning(SystemTestingBase):
 
     def test_TC012_safe_handling_of_malformed_and_missing_features(self):
         """TC012: Test missing, malformed, or non-numeric feature inputs raise ValueError."""
-        # Case 1: Missing required raw feature
+        # Case 1: Missing required Stage 2 feature
         missing_input = {
-            "previous_experience_months": 12.0,
-            "sales_experience_months": 6.0
-            # missing remaining features
+            "weighted_skill_margin": 12.0,
+            "min_skill_margin": 6.0
+            # missing weakest_link_deficit, exp_surplus_tanh, difficulty_tier
         }
         with self.assertRaises(ValueError) as ctx_missing:
-            inference_engine.predict(missing_input)
-        self.assertIn("Missing required feature keys", str(ctx_missing.exception))
+            task_suitability_engine.predict(missing_input)
+        self.assertIn("Missing required task suitability feature keys", str(ctx_missing.exception))
 
         # Case 2: Non-numeric feature input
         invalid_type_input = {
-            "previous_experience_months": "not_a_number",
-            "sales_experience_months": 12.0,
-            "customer_service_experience_months": 12.0,
-            "certification_count": 1.0,
-            "relevant_certification": 1.0,
-            "assessment_score": 75.0,
-            "communication_score": 75.0,
-            "product_knowledge_score": 75.0,
-            "sales_skill_score": 75.0,
-            "customer_service_score": 75.0
+            "weighted_skill_margin": "not_a_number",
+            "min_skill_margin": 5.0,
+            "weakest_link_deficit": 0.0,
+            "exp_surplus_tanh": 0.85,
+            "difficulty_tier": 2.0
         }
         with self.assertRaises(ValueError) as ctx_type:
-            inference_engine.predict(invalid_type_input)
-        self.assertIn("must be a numeric value", str(ctx_type.exception))
+            task_suitability_engine.predict(invalid_type_input)
+        self.assertIn("must be numeric", str(ctx_type.exception))
 
 
 # =====================================================================
@@ -615,17 +596,18 @@ class TestCategoryD_TaskEligibility(SystemTestingBase):
 
     def test_TC016_send_to_review_not_silently_treated_as_eligible(self):
         """TC016: Verify that a 'Not Eligible' outcome is NOT treated as confirmed eligibility."""
-        # Agent 2 (0 mo exp, 0 certs) scores 100% on the exam.
-        # Model predicts Class 0 (Not Eligible).
+        # Agent 2 (0 mo exp, 0 certs) submits failing answers on the exam.
+        # Deterministic evaluation evaluates to Not Eligible.
         start_res = self.client.post(
             f"/api/competency/exams/{self.exam_id}/start-attempt",
             headers=self.agent2_headers
         )
         attempt_id = start_res.get_json()["data"]["attempt_id"]
+        failing_answers = {"13": "D", "14": "D", "15": "D", "16": "D", "17": "D"}
         submit_res = self.client.post(
             f"/api/competency/exams/{self.exam_id}/submit",
             headers=self.agent2_headers,
-            json={"attempt_id": attempt_id, "answers": self.all_correct_answers}
+            json={"attempt_id": attempt_id, "answers": failing_answers}
         )
         self.assertEqual(submit_res.status_code, 200)
         data = submit_res.get_json()["data"]
@@ -744,7 +726,7 @@ class TestCategoryF_DatabaseAndErrorHandling(SystemTestingBase):
         self.client.post(
             f"/api/competency/exams/{self.exam_id}/submit",
             headers=self.agent2_headers,
-            json={"attempt_id": start2.get_json()["data"]["attempt_id"], "answers": self.all_correct_answers}
+            json={"attempt_id": start2.get_json()["data"]["attempt_id"], "answers": self.failing_answers}
         )
 
         # Query Agent 1's status

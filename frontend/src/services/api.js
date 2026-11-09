@@ -85,6 +85,13 @@ class ApiClient {
       ...options,
     });
   }
+
+  delete(endpoint, options = {}) {
+    return this.request(endpoint, {
+      method: 'DELETE',
+      ...options,
+    });
+  }
 }
 
 export const api = new ApiClient(API_BASE_URL);

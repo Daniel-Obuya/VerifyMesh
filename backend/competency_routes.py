@@ -3,7 +3,6 @@ import logging
 import math
 from datetime import datetime
 from flask import Blueprint, request, jsonify
-from src.inference import inference_engine
 from backend.auth_routes import decode_auth_token
 from backend.db import (
     find_user_by_id,
@@ -13,6 +12,7 @@ from backend.db import (
     reset_agent_assessment,
     get_agent_tasks_with_eligibility,
     apply_for_task,
+    get_agent_applications,
     get_agent_recent_activities,
     COMPETENCY_ENUM_TO_LABEL,
     COMPETENCY_LABEL_TO_ENUM,
@@ -39,7 +39,10 @@ from backend.db import (
     save_agent_topic_result,
     get_assessment_topics_list,
     get_assessment_topic_by_id,
-    get_topic_questions
+    get_topic_questions,
+    get_experience_by_verification_token,
+    submit_supervisor_experience_review,
+    resend_supervisor_experience_email
 )
 
 logger = logging.getLogger("verifymesh.competency")
@@ -111,15 +114,22 @@ def get_authenticated_agent():
     return user_id, canonical_role, None
 
 
+def _opt_float(value):
+    """Convert to float, preserving None so that missing evidence is never replaced by a default score."""
+    return None if value is None else float(value)
+
+
+def _opt_round(value, digits=1):
+    """Round a value, preserving None so that missing evidence is never replaced by a default score."""
+    return None if value is None else round(value, digits)
+
+
 @competency_bp.route("/evaluate", methods=["POST"])
 def evaluate_eligibility():
     """
-    Evaluate agent eligibility using the 11-feature ML model and persist the result.
-
-    Authentication: Bearer token required; Agent role enforced server-side.
-    Any user_id or agent_id in the request body is silently ignored.
-    The assessment result, model prediction, and audit event are saved in a
-    single transaction; the endpoint returns 500 if persistence fails.
+    RETIRED. Eligibility is evaluated deterministically per agent-task pair by the server.
+    This endpoint previously produced a general eligibility decision from a stored score with
+    default values, which the specification forbids. It no longer evaluates or persists anything.
     """
     user_id, _role, err = get_authenticated_agent()
     if err:
@@ -135,112 +145,10 @@ def evaluate_eligibility():
             "error": f"Client-supplied assessment scores or protected model features are strictly forbidden: {', '.join(supplied_forbidden)}. Scores are calculated server-side only."
         }), 400
 
-    # Retrieve authoritative assessment from database
-    existing_assessment = get_agent_assessment(user_id)
-    if not existing_assessment or not existing_assessment.get("assessment"):
-        return jsonify({
-            "success": False,
-            "error": "No verified assessment found. You must complete an authoritative scenario assessment first."
-        }), 400
-
-    existing_scores = existing_assessment.get("assessment", {})
-    data = {}
-    for score_key in [
-        "assessment_score",
-        "communication_score",
-        "product_knowledge_score",
-        "sales_skill_score",
-        "customer_service_score",
-    ]:
-        data[score_key] = float(existing_scores.get(score_key, 75.0))
-
-    # Reconcile profile features with authoritative verified database records
-    conn = get_mysql_connection()
-    if conn:
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT agent_id FROM agents WHERE user_id = %s", (user_id,))
-                ag_row = cur.fetchone()
-                if ag_row:
-                    ag_id = ag_row["agent_id"]
-                    v_exp = calculate_agent_verified_experience(ag_id, cur)
-                    v_cert = calculate_agent_verified_certifications(ag_id, cur)
-                    if v_exp.get("verified_entries_count", 0) > 0:
-                        data["previous_experience_months"] = float(v_exp["previous_experience_months"])
-                        data["sales_experience_months"] = float(v_exp["sales_experience_months"])
-                        data["customer_service_experience_months"] = float(v_exp["customer_service_experience_months"])
-                    data["certification_count"] = float(v_cert["certification_count"])
-                    data["relevant_certification"] = float(v_cert["relevant_certification"])
-        finally:
-            conn.close()
-
-    try:
-        result = inference_engine.predict(data)
-    except ValueError as ve:
-        return jsonify({"status": "error", "message": str(ve)}), 400
-    except RuntimeError as re:
-        return jsonify({"success": False, "error": str(re)}), 503
-    except Exception as e:
-        return jsonify({"status": "error", "message": "An error occurred during inference", "details": str(e)}), 500
-
-    prediction_label = result.get("prediction", "Eligible" if str(result.get("decision", "0")) == "1" else "Not Eligible")
-    decision_code = int(result.get("decision_code", 1 if prediction_label == "Eligible" else 0))
-    raw_decision = str(decision_code)
-    predicted_enum = "ELIGIBLE" if prediction_label == "Eligible" else "NOT_ELIGIBLE"
-    confidence = float(result.get("confidence", 0.0))
-    p_eligible = float(result.get("p_eligible", confidence if prediction_label == "Eligible" else 1.0 - confidence))
-    p_not_eligible = float(result.get("p_not_eligible", 1.0 - p_eligible))
-
-    competency_label = prediction_label
-    decision_label = prediction_label
-
-    prediction_data = {
-        "decision": raw_decision,
-        "decision_code": decision_code,
-        "predicted_enum": predicted_enum,
-        "prediction": competency_label,
-        "predicted_competency": competency_label,
-        "competency_status": competency_label,
-        "evaluation_decision": decision_label,
-        "is_eligible": prediction_label == "Eligible",
-        "confidence": round(confidence * 100 if confidence <= 1.0 else confidence, 1),
-        "p_eligible": p_eligible,
-        "p_not_eligible": p_not_eligible,
-        "probabilities": {
-            "Eligible": round(p_eligible * 100, 1),
-            "Not Eligible": round(p_not_eligible * 100, 1)
-        },
-    }
-
-    try:
-        saved = save_agent_assessment(
-            user_id=user_id,
-            assessment_data=dict(data),
-            competency_level=competency_label,
-            confidence=confidence,
-            prediction_data=prediction_data,
-        )
-    except ValueError as ve:
-        return jsonify({"success": False, "error": str(ve)}), 422
-    except RuntimeError as re:
-        return jsonify({"success": False, "error": str(re)}), 500
-
     return jsonify({
-        "status": "success",
-        "data": {
-            "decision": raw_decision,
-            "competency_level": competency_label,
-            "evaluation_decision": decision_label,
-            "confidence": confidence,
-            "probabilities": result.get("probabilities", {}),
-        },
-        "feature_vector": dict(data),
-        "saved": {
-            "attempt_number": saved["attempt_number"],
-            "exam_result_id": saved["exam_result_id"],
-            "prediction_id": saved["prediction_id"],
-        },
-    }), 200
+        "success": False,
+        "error": "This endpoint has been retired. Task eligibility is evaluated by the server for each task and assessment results are recorded through the assessment submission endpoints."
+    }), 410
 
 
 @competency_bp.route("/agent-status", methods=["GET"])
@@ -330,6 +238,25 @@ def apply_task(task_id):
         return jsonify({"success": False, "error": str(re)}), 500
     except Exception as e:
         return jsonify({"success": False, "error": f"Failed to submit application: {str(e)}"}), 500
+
+
+@competency_bp.route("/applications", methods=["GET"])
+def agent_applications():
+    """Retrieve all submitted task applications and assignment statuses for the authenticated agent."""
+    user_id, _role, err = get_authenticated_agent()
+    if err:
+        return err
+
+    try:
+        apps = get_agent_applications(user_id)
+        return jsonify({
+            "success": True,
+            "data": apps,
+            "count": len(apps)
+        }), 200
+    except Exception as e:
+        logger.error(f"Error fetching applications for user {user_id}: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @competency_bp.route("/activities", methods=["GET"])
@@ -468,6 +395,67 @@ def remove_experience(experience_id):
         return jsonify({"success": False, "error": f"Failed to remove experience: {str(e)}"}), 500
 
 
+@competency_bp.route("/experiences/<int:experience_id>/resend", methods=["POST"])
+def resend_supervisor_email_route(experience_id):
+    """Trigger a resend of the supervisor verification email."""
+    user_id, _role, err = get_authenticated_agent()
+    if err:
+        return err
+    try:
+        res = resend_supervisor_experience_email(experience_id, user_id)
+        return jsonify({
+            "success": True,
+            "message": "Verification email resent successfully to supervisor.",
+            "data": res
+        }), 200
+    except ValueError as ve:
+        return jsonify({"success": False, "error": str(ve)}), 400
+    except Exception as e:
+        logger.error(f"Error resending supervisor email: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@competency_bp.route("/public/verify-experience/<token>", methods=["GET"])
+def public_get_experience_for_verification(token):
+    """
+    Public endpoint: Returns details of an experience record for the supervisor verification screen.
+    Does not require agent or admin authentication.
+    """
+    detail, err = get_experience_by_verification_token(token)
+    if err:
+        return jsonify({"success": False, "error": err}), 404
+    return jsonify({"success": True, "data": detail}), 200
+
+
+@competency_bp.route("/public/verify-experience/<token>", methods=["POST"])
+def public_submit_experience_verification(token):
+    """
+    Public endpoint: Allows a former supervisor/manager to confirm or dispute employment.
+    Payload: { "decision": "CONFIRM" | "DISPUTE", "feedback": "...", "answers": { ... } }
+    """
+    payload = request.get_json(silent=True) or {}
+    decision = payload.get("decision")
+    feedback = payload.get("feedback")
+    answers = payload.get("answers")
+
+    if not decision or decision not in ("CONFIRM", "DISPUTE"):
+        return jsonify({"success": False, "error": "Decision must be 'CONFIRM' or 'DISPUTE'"}), 400
+
+    try:
+        res = submit_supervisor_experience_review(token, decision, feedback=feedback, answers=answers)
+        status_msg = "verified" if decision == "CONFIRM" else "flagged as disputed"
+        return jsonify({
+            "success": True,
+            "message": f"Employment tenure successfully {status_msg}. Thank you for your feedback.",
+            "data": res
+        }), 200
+    except ValueError as ve:
+        return jsonify({"success": False, "error": str(ve)}), 400
+    except Exception as e:
+        logger.error(f"Error processing supervisor review for token {token}: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 # =====================================================================
 # CERTIFICATIONS
 # =====================================================================
@@ -526,21 +514,11 @@ def remove_certification(cert_id):
 
 @competency_bp.route("/model-info", methods=["GET"])
 def get_model_info():
-    """Return runtime metadata about the active ML inference model."""
-    info = inference_engine.get_info()
+    """Return runtime metadata about the active ML inference model and eligibility engine."""
+    from src.task_suitability_inference import task_suitability_engine
     return jsonify({
         "success": True,
-        "data": {
-            "model_loaded": info.get("model_loaded"),
-            "model_file": info.get("model_file"),
-            "features_count": info.get("features_count", 11),
-            "expected_features": inference_engine.EXPECTED_FEATURES,
-            "classes": (
-                ["Not Eligible (0)", "Eligible (1)"]
-                if info.get("is_binary_gatekeeper", False)
-                else ["Needs Improvement (0)", "Basic (1)", "Competent / Advanced (2)"]
-            )
-        }
+        "data": task_suitability_engine.get_info()
     }), 200
 
 
@@ -1023,11 +1001,11 @@ def submit_exam_answers(exam_id):
             if exam_id == 1:
                 feat_product = diagnostic_pct
                 feat_sales = communication_pct
-                feat_cs = 75.0
+                feat_cs = None  # not assessed by this exam; missing evidence stays missing
                 feat_comm = triage_pct
             else:
                 feat_product = diagnostic_pct
-                feat_sales = 75.0
+                feat_sales = None  # not assessed by this exam; missing evidence stays missing
                 feat_cs = communication_pct
                 feat_comm = communication_pct
 
@@ -1038,21 +1016,21 @@ def submit_exam_answers(exam_id):
                 "certification_count": float(v_cert["certification_count"]),
                 "relevant_certification": float(v_cert["relevant_certification"]),
                 "assessment_score": float(composite_pct),
-                "communication_score": float(feat_comm),
-                "product_knowledge_score": float(feat_product),
-                "sales_skill_score": float(feat_sales),
-                "customer_service_score": float(feat_cs),
+                "communication_score": _opt_float(feat_comm),
+                "product_knowledge_score": _opt_float(feat_product),
+                "sales_skill_score": _opt_float(feat_sales),
+                "customer_service_score": _opt_float(feat_cs),
             }
 
-            # 8. ML prediction and canonical binary competency classification
-            ml_result = inference_engine.predict(ml_features)
-            prediction_label = ml_result.get("prediction", "Eligible" if str(ml_result.get("decision", "0")) == "1" else "Not Eligible")
-            decision_code = int(ml_result.get("decision_code", 1 if prediction_label == "Eligible" else 0))
+            # 8. Deterministic competency evaluation (Binary ML gatekeeper retired)
+            prediction_label = "Eligible" if passed else "Not Eligible"
+            decision_code = 1 if passed else 0
             raw_decision = str(decision_code)
-            predicted_enum = "ELIGIBLE" if prediction_label == "Eligible" else "NOT_ELIGIBLE"
-            confidence = float(ml_result.get("confidence", 0.0))
-            p_eligible = float(ml_result.get("p_eligible", confidence if prediction_label == "Eligible" else 1.0 - confidence))
-            p_not_eligible = float(ml_result.get("p_not_eligible", 1.0 - p_eligible))
+            predicted_enum = "ELIGIBLE" if passed else "NOT_ELIGIBLE"
+            conf_val = round(composite_pct / 100.0, 4) if passed else round(max(0.5, (100.0 - composite_pct) / 100.0), 4)
+            confidence = conf_val
+            p_eligible = round(composite_pct / 100.0, 4)
+            p_not_eligible = round(1.0 - p_eligible, 4)
 
             competency_label = prediction_label
             decision_label = prediction_label
@@ -1065,7 +1043,7 @@ def submit_exam_answers(exam_id):
                 "predicted_competency": competency_label,
                 "competency_status": competency_label,
                 "evaluation_decision": decision_label,
-                "is_eligible": prediction_label == "Eligible",
+                "is_eligible": bool(passed),
                 "confidence": confidence,
                 "p_eligible": p_eligible,
                 "p_not_eligible": p_not_eligible,
@@ -1127,8 +1105,7 @@ def submit_exam_answers(exam_id):
                 "features_used": ml_features
             }
 
-            engine_info = inference_engine.get_info()
-            model_ver = engine_info.get("model_version", "1.0.0")
+            model_ver = "Deterministic Rules Engine v2.0"
 
             finalize_assessment_attempt(
                 attempt_id=attempt["attempt_id"],
@@ -1296,9 +1273,43 @@ def start_topic_attempt(topic_id):
                 return jsonify({"success": False, "error": "Agent profile not found."}), 404
             agent_id = ag["agent_id"]
 
-            # Map topic to corresponding legacy exam_id for attempt tracking
-            topic_to_exam = {1: 2, 2: 1, 3: 3, 4: 4}
-            mapped_exam_id = topic_to_exam.get(topic_id, 3)
+            # If task_id is provided, validate that this topic is required for the task
+            if task_id:
+                cursor.execute("""
+                    SELECT t.exam_id, tr.exam_required 
+                    FROM tasks t
+                    LEFT JOIN task_requirements tr ON t.task_id = tr.task_id
+                    WHERE t.task_id = %s
+                """, (task_id,))
+                task_row = cursor.fetchone()
+                if not task_row:
+                    return jsonify({"success": False, "error": f"Task {task_id} not found."}), 404
+
+                if task_row.get("exam_required"):
+                    cursor.execute("""
+                        SELECT topic_id FROM task_assessment_topics WHERE task_id = %s
+                    """, (task_id,))
+                    allowed_topics = {r["topic_id"] for r in cursor.fetchall()}
+                    if not allowed_topics and task_row.get("exam_id"):
+                        cursor.execute("""
+                            SELECT DISTINCT topic_id FROM exam_questions WHERE exam_id = %s AND topic_id IS NOT NULL
+                        """, (task_row["exam_id"],))
+                        allowed_topics = {r["topic_id"] for r in cursor.fetchall()}
+
+                    if allowed_topics and topic_id not in allowed_topics:
+                        return jsonify({
+                            "success": False,
+                            "error": f"Mismatched topic: Topic {topic_id} is not configured or required for task {task_id}."
+                        }), 400
+
+            # Authoritatively resolve exam_id from exam_questions, fallback to static mapping
+            cursor.execute("SELECT DISTINCT exam_id FROM exam_questions WHERE topic_id = %s ORDER BY exam_id LIMIT 1", (topic_id,))
+            db_exam_row = cursor.fetchone()
+            if db_exam_row and db_exam_row.get("exam_id"):
+                mapped_exam_id = db_exam_row["exam_id"]
+            else:
+                topic_to_exam = {1: 2, 2: 1, 3: 3, 4: 4}
+                mapped_exam_id = topic_to_exam.get(topic_id, 3)
 
             try:
                 attempt = create_assessment_attempt(agent_id, mapped_exam_id, task_id, topic_id)
@@ -1368,8 +1379,43 @@ def submit_topic_answers(topic_id):
                 return jsonify({"success": False, "error": "Agent profile not found."}), 404
             agent_id = ag_row["agent_id"]
 
-            topic_to_exam = {1: 2, 2: 1, 3: 3, 4: 4}
-            mapped_exam_id = topic_to_exam.get(topic_id, 3)
+            # If task_id is provided, validate that this topic is required for the task
+            if task_id:
+                cursor.execute("""
+                    SELECT t.exam_id, tr.exam_required 
+                    FROM tasks t
+                    LEFT JOIN task_requirements tr ON t.task_id = tr.task_id
+                    WHERE t.task_id = %s
+                """, (task_id,))
+                task_row = cursor.fetchone()
+                if not task_row:
+                    return jsonify({"success": False, "error": f"Task {task_id} not found."}), 404
+
+                if task_row.get("exam_required"):
+                    cursor.execute("""
+                        SELECT topic_id FROM task_assessment_topics WHERE task_id = %s
+                    """, (task_id,))
+                    allowed_topics = {r["topic_id"] for r in cursor.fetchall()}
+                    if not allowed_topics and task_row.get("exam_id"):
+                        cursor.execute("""
+                            SELECT DISTINCT topic_id FROM exam_questions WHERE exam_id = %s AND topic_id IS NOT NULL
+                        """, (task_row["exam_id"],))
+                        allowed_topics = {r["topic_id"] for r in cursor.fetchall()}
+
+                    if allowed_topics and topic_id not in allowed_topics:
+                        return jsonify({
+                            "success": False,
+                            "error": f"Mismatched topic: Topic {topic_id} is not configured or required for task {task_id}."
+                        }), 400
+
+            # Authoritatively resolve exam_id from exam_questions, fallback to static mapping
+            cursor.execute("SELECT DISTINCT exam_id FROM exam_questions WHERE topic_id = %s ORDER BY exam_id LIMIT 1", (topic_id,))
+            db_exam_row = cursor.fetchone()
+            if db_exam_row and db_exam_row.get("exam_id"):
+                mapped_exam_id = db_exam_row["exam_id"]
+            else:
+                topic_to_exam = {1: 2, 2: 1, 3: 3, 4: 4}
+                mapped_exam_id = topic_to_exam.get(topic_id, 3)
 
             # If attempt_id not passed, find active in-progress attempt for topic
             if not attempt_id:
@@ -1526,10 +1572,11 @@ def submit_topic_answers(topic_id):
             topic_scores = {r["topic_id"]: float(r["score"]) for r in cursor.fetchall()}
             topic_scores[topic_id] = rounded_score
 
-            feat_product = topic_scores.get(1, rounded_score if topic_id == 1 else 75.0)
-            feat_sales = topic_scores.get(2, rounded_score if topic_id == 2 else 75.0)
-            feat_comm = topic_scores.get(3, rounded_score if topic_id == 3 else 75.0)
-            feat_cs = topic_scores.get(4, rounded_score if topic_id == 4 else 75.0)
+            # Topics the agent has not attempted remain None; no default score is substituted.
+            feat_product = topic_scores.get(1)
+            feat_sales = topic_scores.get(2)
+            feat_comm = topic_scores.get(3)
+            feat_cs = topic_scores.get(4)
 
             all_scores = list(topic_scores.values())
             overall_assessment_score = sum(all_scores) / len(all_scores) if all_scores else composite_pct
@@ -1548,21 +1595,21 @@ def submit_topic_answers(topic_id):
                 "certification_count": float(v_cert["certification_count"]),
                 "relevant_certification": float(v_cert["relevant_certification"]),
                 "assessment_score": float(overall_assessment_score),
-                "communication_score": float(feat_comm),
-                "product_knowledge_score": float(feat_product),
-                "sales_skill_score": float(feat_sales),
-                "customer_service_score": float(feat_cs),
+                "communication_score": _opt_float(feat_comm),
+                "product_knowledge_score": _opt_float(feat_product),
+                "sales_skill_score": _opt_float(feat_sales),
+                "customer_service_score": _opt_float(feat_cs),
             }
 
-            # 6. ML Prediction and canonical binary competency classification
-            ml_result = inference_engine.predict(ml_features)
-            prediction_label = ml_result.get("prediction", "Eligible" if str(ml_result.get("decision", "0")) == "1" else "Not Eligible")
-            decision_code = int(ml_result.get("decision_code", 1 if prediction_label == "Eligible" else 0))
+            # 6. Deterministic competency evaluation (Binary ML gatekeeper retired)
+            prediction_label = "Eligible" if passed else "Not Eligible"
+            decision_code = 1 if passed else 0
             raw_decision = str(decision_code)
-            predicted_enum = "ELIGIBLE" if prediction_label == "Eligible" else "NOT_ELIGIBLE"
-            confidence = float(ml_result.get("confidence", 0.0))
-            p_eligible = float(ml_result.get("p_eligible", confidence if prediction_label == "Eligible" else 1.0 - confidence))
-            p_not_eligible = float(ml_result.get("p_not_eligible", 1.0 - p_eligible))
+            predicted_enum = "ELIGIBLE" if passed else "NOT_ELIGIBLE"
+            conf_val = round(composite_pct / 100.0, 4) if passed else round(max(0.5, (100.0 - composite_pct) / 100.0), 4)
+            confidence = conf_val
+            p_eligible = round(composite_pct / 100.0, 4)
+            p_not_eligible = round(1.0 - p_eligible, 4)
 
             competency_label = prediction_label
             decision_label = prediction_label
@@ -1575,7 +1622,7 @@ def submit_topic_answers(topic_id):
                 "predicted_competency": competency_label,
                 "competency_status": competency_label,
                 "evaluation_decision": decision_label,
-                "is_eligible": prediction_label == "Eligible",
+                "is_eligible": bool(passed),
                 "confidence": confidence,
                 "p_eligible": p_eligible,
                 "p_not_eligible": p_not_eligible,
@@ -1585,9 +1632,12 @@ def submit_topic_answers(topic_id):
                 }
             }
 
+            ml_features_with_attempt = dict(ml_features)
+            ml_features_with_attempt["attempt_score"] = float(composite_pct)
+
             saved = save_agent_assessment(
                 user_id=user_id,
-                assessment_data=ml_features,
+                assessment_data=ml_features_with_attempt,
                 competency_level=competency_label,
                 confidence=confidence,
                 prediction_data=prediction_data,
@@ -1603,10 +1653,10 @@ def submit_topic_answers(topic_id):
             conf_pct = round(confidence * 100 if confidence <= 1.0 else confidence)
 
             subscores_dict = {
-                "product_knowledge_score": round(feat_product, 1),
-                "sales_skill_score": round(feat_sales, 1),
-                "communication_score": round(feat_comm, 1),
-                "customer_service_score": round(feat_cs, 1)
+                "product_knowledge_score": _opt_round(feat_product, 1),
+                "sales_skill_score": _opt_round(feat_sales, 1),
+                "communication_score": _opt_round(feat_comm, 1),
+                "customer_service_score": _opt_round(feat_cs, 1)
             }
 
             decision_details = {
@@ -1618,8 +1668,7 @@ def submit_topic_answers(topic_id):
                 "features_used": ml_features
             }
 
-            engine_info = inference_engine.get_info()
-            model_ver = engine_info.get("model_version", "1.0.0")
+            model_ver = "Deterministic Rules Engine v2.0"
 
             finalize_assessment_attempt(
                 attempt_id=attempt["attempt_id"],

@@ -452,10 +452,10 @@ class TestExamPassThresholds(unittest.TestCase):
         self.assertEqual(data["score"], 100.0)
         self.assertTrue(data["passed"])
 
-        # BUT competency evaluates to Not Eligible (Class 0)
-        self.assertEqual(data["prediction"]["decision_code"], 0)
-        self.assertEqual(data["competency_level"], "Not Eligible")
-        self.assertEqual(data["evaluation_decision"], "Not Eligible")
+        # Assessment evaluates deterministically to passed (Eligible)
+        self.assertEqual(data["prediction"]["decision_code"], 1)
+        self.assertEqual(data["competency_level"], "Eligible")
+        self.assertEqual(data["evaluation_decision"], "Eligible")
 
         # Downstream task eligibility: Task 4 requires Eligible -> agent cannot apply
         tasks = get_agent_tasks_with_eligibility(user_id=6)

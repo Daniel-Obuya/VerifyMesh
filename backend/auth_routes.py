@@ -362,7 +362,7 @@ def get_current_user():
             "assessment": user.get("assessment", None),
             "competency_level": user.get("competency_level", None),
             "confidence": user.get("confidence", None),
-            "dashboardUrl": "/admin/dashboard" if canonical_role == "Administrator" else "/agent/dashboard"
+            "dashboardUrl": "/workforce/dashboard" if canonical_role in ("Administrator", "Workforce Officer", "ADMIN", "WORKFORCE_OFFICER") else "/dashboard"
         }
     }), 200
 

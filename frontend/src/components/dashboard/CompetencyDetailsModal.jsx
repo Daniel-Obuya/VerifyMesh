@@ -18,51 +18,51 @@ export const CompetencyDetailsModal = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
       <div 
-        className="w-full max-w-xl bg-white rounded-2xl shadow-2xl border border-slate-150 flex flex-col max-h-[90vh] overflow-hidden"
+        className="w-full max-w-xl bg-[#0d1428] rounded-2xl shadow-2xl border border-[#2b3a67] flex flex-col max-h-[90vh] overflow-hidden text-white"
         role="dialog"
         aria-modal="true"
       >
         {/* Header */}
-        <div className="p-5 sm:px-6 sm:py-5 border-b border-slate-100 flex items-center justify-between bg-white shrink-0">
+        <div className="p-4 sm:px-6 sm:py-4 border-b border-[#1b2542] flex items-center justify-between bg-[#080d1a] shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-[#EEF2FF] text-[#3B50BA] flex items-center justify-center shrink-0">
-              <BrainCircuit className="w-5 h-5" />
+            <div className="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0">
+              <BrainCircuit className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-slate-900">
+              <h3 className="text-base font-bold font-sora text-white leading-snug">
                 Competency Profile &amp; Model Insights
               </h3>
-              <p className="text-xs text-slate-500">
-                Binary Gatekeeper Random Forest Model &bull; Verification Summary
+              <p className="text-[11px] text-slate-400">
+                Deterministic Eligibility Engine &bull; Verification Summary
               </p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+            className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-[#151f38] transition-colors cursor-pointer"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Content */}
-        <div className="p-5 sm:p-6 overflow-y-auto space-y-5">
+        <div className="p-5 sm:p-6 overflow-y-auto space-y-4 text-xs sm:text-[13px] text-slate-300">
           {/* Main Status Banner */}
-          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between">
+          <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52] flex items-center justify-between">
             <div>
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">
+              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block">
                 Current Level
               </span>
-              <h4 className="text-2xl font-bold text-slate-900 mt-0.5">{competency}</h4>
-              <p className="text-xs text-[#3B50BA] font-medium mt-0.5">
+              <h4 className="text-xl font-bold font-sora text-white mt-0.5">{competency}</h4>
+              <p className="text-xs text-indigo-400 font-medium mt-0.5">
                 {confidence}% AI Confidence
               </p>
             </div>
             <div className="text-right">
-              <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-950/60 text-emerald-400 border border-emerald-500/40">
                 <CheckCircle2 className="w-3.5 h-3.5" />
                 Verified Active
               </span>
@@ -71,22 +71,24 @@ export const CompetencyDetailsModal = ({
 
           {/* Model Probability Breakdown */}
           <div className="space-y-2">
-            <h5 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+            <h5 className="text-xs font-bold text-indigo-400 uppercase tracking-wider">
               Random Forest Probability Breakdown
             </h5>
-            <div className="p-4 rounded-xl bg-slate-50/70 border border-slate-200 space-y-3">
+            <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52] space-y-3">
               {Object.entries(probabilities).map(([cls, prob]) => {
                 const isEligibleClass = cls === 'Eligible';
                 return (
                   <div key={cls} className="space-y-1">
                     <div className="flex justify-between text-xs font-semibold">
-                      <span className="text-slate-700">{cls}</span>
-                      <span className="text-slate-900">{prob}%</span>
+                      <span className="text-slate-300">{cls}</span>
+                      <span className="text-white font-bold">{prob}%</span>
                     </div>
-                    <div className="w-full bg-slate-200/70 h-2 rounded-full overflow-hidden">
+                    <div className="w-full bg-[#141c33] h-2 rounded-full overflow-hidden border border-[#1b2542]">
                       <div 
                         className={`h-full rounded-full transition-all duration-500 ${
-                          isEligibleClass ? 'bg-emerald-600' : 'bg-slate-400'
+                          isEligibleClass 
+                            ? 'bg-gradient-to-r from-emerald-500 to-teal-400 shadow-[0_0_10px_rgba(16,185,129,0.5)]' 
+                            : 'bg-slate-600'
                         }`}
                         style={{ width: `${Math.min(prob, 100)}%` }}
                       />
@@ -99,53 +101,53 @@ export const CompetencyDetailsModal = ({
 
           {/* Battery Test Scores */}
           <div className="space-y-2">
-            <h5 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+            <h5 className="text-xs font-bold text-indigo-400 uppercase tracking-wider">
               Core Test Battery Breakdown
             </h5>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-              <div className="p-3 bg-white rounded-lg border border-slate-200">
-                <span className="text-[11px] text-slate-400 font-medium block">Overall Score</span>
-                <span className="text-sm font-bold text-slate-900">{formData?.assessment_score || 82.5} / 100</span>
+              <div className="p-3 bg-[#0e162d] rounded-xl border border-[#232f52]">
+                <span className="text-[10px] text-slate-400 font-medium block">Overall Score</span>
+                <span className="text-sm font-bold text-white">{formData?.assessment_score || 82.5} / 100</span>
               </div>
-              <div className="p-3 bg-white rounded-lg border border-slate-200">
-                <span className="text-[11px] text-slate-400 font-medium block">Communication</span>
-                <span className="text-sm font-bold text-slate-900">{formData?.communication_score || 85.0} / 100</span>
+              <div className="p-3 bg-[#0e162d] rounded-xl border border-[#232f52]">
+                <span className="text-[10px] text-slate-400 font-medium block">Communication</span>
+                <span className="text-sm font-bold text-white">{formData?.communication_score || 85.0} / 100</span>
               </div>
-              <div className="p-3 bg-white rounded-lg border border-slate-200">
-                <span className="text-[11px] text-slate-400 font-medium block">Product Knowledge</span>
-                <span className="text-sm font-bold text-slate-900">{formData?.product_knowledge_score || 80.0} / 100</span>
+              <div className="p-3 bg-[#0e162d] rounded-xl border border-[#232f52]">
+                <span className="text-[10px] text-slate-400 font-medium block">Product Knowledge</span>
+                <span className="text-sm font-bold text-white">{formData?.product_knowledge_score || 80.0} / 100</span>
               </div>
-              <div className="p-3 bg-white rounded-lg border border-slate-200">
-                <span className="text-[11px] text-slate-400 font-medium block">Sales Skill</span>
-                <span className="text-sm font-bold text-slate-900">{formData?.sales_skill_score || 88.0} / 100</span>
+              <div className="p-3 bg-[#0e162d] rounded-xl border border-[#232f52]">
+                <span className="text-[10px] text-slate-400 font-medium block">Sales Skill</span>
+                <span className="text-sm font-bold text-white">{formData?.sales_skill_score || 88.0} / 100</span>
               </div>
-              <div className="p-3 bg-white rounded-lg border border-slate-200">
-                <span className="text-[11px] text-slate-400 font-medium block">Customer Service</span>
-                <span className="text-sm font-bold text-slate-900">{formData?.customer_service_score || 84.0} / 100</span>
+              <div className="p-3 bg-[#0e162d] rounded-xl border border-[#232f52]">
+                <span className="text-[10px] text-slate-400 font-medium block">Customer Service</span>
+                <span className="text-sm font-bold text-white">{formData?.customer_service_score || 84.0} / 100</span>
               </div>
-              <div className="p-3 bg-white rounded-lg border border-slate-200">
-                <span className="text-[11px] text-slate-400 font-medium block">Domain Experience</span>
-                <span className="text-sm font-bold text-slate-900">{formData?.previous_experience_months || 24} mos</span>
+              <div className="p-3 bg-[#0e162d] rounded-xl border border-[#232f52]">
+                <span className="text-[10px] text-slate-400 font-medium block">Domain Experience</span>
+                <span className="text-sm font-bold text-white">{formData?.previous_experience_months || 24} mos</span>
               </div>
             </div>
           </div>
 
           {/* Model Decoupling Architecture Note */}
-          <div className="p-3.5 rounded-xl bg-blue-50/60 border border-blue-100 text-xs text-slate-600 leading-relaxed">
-            <p className="font-semibold text-blue-900 mb-1 flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-[#3B50BA]" />
-              Model Architecture &amp; Training
+          <div className="p-3.5 rounded-xl bg-indigo-950/30 border border-indigo-500/30 text-xs text-slate-300 leading-relaxed">
+            <p className="font-semibold text-indigo-300 mb-1 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+              Eligibility Architecture &amp; Rules Engine
             </p>
-            VerifyMesh employs an authoritative Binary Gatekeeper Random Forest model (150 trees, max depth 10, 74.5% test accuracy, 0.8184 ROC-AUC) to classify competency into <strong>Eligible</strong> or <strong>Not Eligible</strong>. Assessment attempts and verified profile credentials continuously inform inference.
+            VerifyMesh employs deterministic server-side business rules to evaluate verified profile credentials, passed assessments, and tenure into an authoritative eligibility status: <strong className="text-emerald-400">Eligible</strong> or <strong className="text-rose-400">Not Eligible</strong>. Active tasks feature advisory machine learning suitability scoring for administrator review.
           </div>
         </div>
 
         {/* Footer */}
-        <div className="p-4 sm:px-6 border-t border-slate-100 flex items-center justify-between bg-white shrink-0">
+        <div className="p-4 sm:px-6 border-t border-[#1b2542] flex items-center justify-between bg-[#080d1a] shrink-0">
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 text-xs sm:text-sm font-semibold text-slate-600 hover:text-slate-900 rounded-xl hover:bg-slate-100 transition-colors"
+            className="px-4 py-2 text-xs font-semibold text-slate-400 hover:text-white rounded-xl hover:bg-[#151f38] transition-colors cursor-pointer"
           >
             Close
           </button>
@@ -155,10 +157,10 @@ export const CompetencyDetailsModal = ({
               onClose();
               if (onOpenAssessment) onOpenAssessment();
             }}
-            className="px-5 py-2.5 rounded-xl bg-[#3B50BA] hover:bg-[#31429e] text-white font-semibold text-xs sm:text-sm shadow-xs transition-colors flex items-center gap-2"
+            className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#2942d9] to-[#5a6ef0] hover:brightness-110 text-white font-semibold text-xs shadow-[0_0_15px_rgba(70,93,235,0.4)] flex items-center gap-1.5 cursor-pointer transition-all"
           >
-            Retake Assessment
-            <ArrowRight className="w-4 h-4" />
+            <span>Retake Assessment</span>
+            <ArrowRight className="w-3.5 h-3.5 ml-0.5" />
           </button>
         </div>
       </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { 
   ArrowLeft, 
@@ -23,43 +23,26 @@ import {
   CheckCircle2, 
   HelpCircle,
   FileText,
-  Trash2
+  Trash2,
+  Search,
+  BookOpen
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { BrandLogo } from '../components/auth/BrandLogo';
-import { Button } from '../components/ui/Button';
-import { Modal } from '../components/ui/Modal';
-import { Alert } from '../components/ui/Alert';
 import { adminService } from '../services/adminService';
 
-const COMPETENCY_TIERS = [
-  {
-    tier: 'ELIGIBLE',
-    label: 'Verified Competent (Eligible)',
-    badge: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    description: 'Candidate must be classified as Eligible by the Gatekeeper Random Forest model.'
-  },
-  {
-    tier: 'NOT_ELIGIBLE',
-    label: 'Open to All (No Competency Gate)',
-    badge: 'bg-slate-50 text-slate-700 border-slate-200',
-    description: 'No prerequisite gatekeeper competency requirement; open to all registered agents.'
-  }
-];
-
 const SKILL_SUGGESTIONS = [
-  'Customer Support',
-  'Technical Diagnostics',
-  'Incident De-escalation',
-  'SLA Adherence',
+  'Customer Communication',
   'CRM Management',
+  'Ticket Management',
+  'Conflict Resolution',
+  'Technical Troubleshooting',
+  'SLA Adherence',
   'Consultative Selling',
-  'Ticket Triage',
-  'Enterprise Communication'
+  'Data Accuracy'
 ];
 
 export const CreateTaskPage = () => {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const { taskId } = useParams();
   const isEditMode = Boolean(taskId);
@@ -67,7 +50,7 @@ export const CreateTaskPage = () => {
   // Loading & Metadata
   const [isLoading, setIsLoading] = useState(isEditMode);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [metadata, setMetadata] = useState({ categories: [], certifications: [], skills: [], exams: [] });
+  const [metadata, setMetadata] = useState({ categories: [], certifications: [], skills: [], exams: [], topics: [] });
   const [formError, setFormError] = useState(null);
   const [formSuccess, setFormSuccess] = useState(null);
   const [inlineErrors, setInlineErrors] = useState({});
@@ -78,6 +61,10 @@ export const CreateTaskPage = () => {
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Search & input states
+  const [skillInput, setSkillInput] = useState('');
+  const [certSearch, setCertSearch] = useState('');
 
   // Form State
   const [formData, setFormData] = useState({
@@ -96,15 +83,12 @@ export const CreateTaskPage = () => {
     positions_count: 1,
     application_deadline: '',
     expected_duration: '3 months',
-    minimum_competency: 'ELIGIBLE',
-    required_certification_id: '',
     minimum_experience_months: 0,
+    required_certification_ids: [],
     exam_required: false,
-    exam_id: '',
+    required_topic_ids: [],
     status: 'ACTIVE'
   });
-
-  const [skillInput, setSkillInput] = useState('');
 
   // Fetch Metadata & Existing Task (if edit mode)
   useEffect(() => {
@@ -125,6 +109,18 @@ export const CreateTaskPage = () => {
               ? t.required_skills.split(',').map(s => s.trim()).filter(Boolean)
               : [];
 
+            let certIds = [];
+            if (Array.isArray(t.required_certification_ids) && t.required_certification_ids.length > 0) {
+              certIds = t.required_certification_ids.map(String);
+            } else if (t.required_certification_id) {
+              certIds = [String(t.required_certification_id)];
+            }
+
+            let topicIds = [];
+            if (Array.isArray(t.required_topic_ids) && t.required_topic_ids.length > 0) {
+              topicIds = t.required_topic_ids.map(String);
+            }
+
             setFormData({
               task_name: t.task_name || '',
               category_id: t.category_id ? String(t.category_id) : '',
@@ -141,11 +137,10 @@ export const CreateTaskPage = () => {
               positions_count: t.positions_count || 1,
               application_deadline: t.application_deadline ? t.application_deadline.split('T')[0] : '',
               expected_duration: t.expected_duration || '3 months',
-              minimum_competency: t.minimum_competency || 'ELIGIBLE',
-              required_certification_id: t.required_certification_id ? String(t.required_certification_id) : '',
               minimum_experience_months: t.minimum_experience_months || 0,
+              required_certification_ids: certIds,
               exam_required: Boolean(t.exam_required),
-              exam_id: t.exam_id ? String(t.exam_id) : '',
+              required_topic_ids: topicIds,
               status: t.status || 'ACTIVE'
             });
           }
@@ -165,18 +160,6 @@ export const CreateTaskPage = () => {
       isMounted = false;
     };
   }, [taskId, isEditMode]);
-
-  // Set default exam when exam_required is toggled or category changes
-  useEffect(() => {
-    if (formData.exam_required && formData.category_id) {
-      const availableExams = metadata.exams.filter(
-        e => String(e.category_id) === String(formData.category_id)
-      );
-      if (availableExams.length > 0 && !formData.exam_id) {
-        setFormData(prev => ({ ...prev, exam_id: String(availableExams[0].exam_id) }));
-      }
-    }
-  }, [formData.exam_required, formData.category_id, metadata.exams, formData.exam_id]);
 
   // Track form changes
   const updateField = (field, value) => {
@@ -206,6 +189,44 @@ export const CreateTaskPage = () => {
       'required_skills',
       formData.required_skills.filter(s => s !== skillToRemove)
     );
+  };
+
+  // Certification Multi-select Handlers
+  const handleToggleCertification = (certId) => {
+    const idStr = String(certId);
+    const exists = formData.required_certification_ids.includes(idStr);
+    if (exists) {
+      updateField(
+        'required_certification_ids',
+        formData.required_certification_ids.filter(id => id !== idStr)
+      );
+    } else {
+      updateField(
+        'required_certification_ids',
+        [...formData.required_certification_ids, idStr]
+      );
+    }
+  };
+
+  const handleClearCertifications = () => {
+    updateField('required_certification_ids', []);
+  };
+
+  // Assessment Topic Multi-select Handlers
+  const handleToggleTopic = (topicId) => {
+    const idStr = String(topicId);
+    const exists = formData.required_topic_ids.includes(idStr);
+    if (exists) {
+      updateField(
+        'required_topic_ids',
+        formData.required_topic_ids.filter(id => id !== idStr)
+      );
+    } else {
+      updateField(
+        'required_topic_ids',
+        [...formData.required_topic_ids, idStr]
+      );
+    }
   };
 
   // Quick Preset for Application Deadline
@@ -274,15 +295,8 @@ export const CreateTaskPage = () => {
       }
 
       if (formData.exam_required) {
-        if (!formData.exam_id) {
-          errors.exam_id = 'Please select an assessment template for this category.';
-        } else {
-          const selectedExam = metadata.exams.find(e => String(e.exam_id) === String(formData.exam_id));
-          if (!selectedExam) {
-            errors.exam_id = 'Selected assessment template is not valid.';
-          } else if (selectedExam.question_count === 0) {
-            errors.exam_id = 'Selected assessment template has no configured questions in server bank.';
-          }
+        if (!formData.required_topic_ids || formData.required_topic_ids.length === 0) {
+          errors.required_topic_ids = 'Please select at least one assessment topic required for this task.';
         }
       }
     }
@@ -317,18 +331,18 @@ export const CreateTaskPage = () => {
         work_arrangement: formData.work_arrangement,
         location: formData.location.trim() || null,
         payment_type: formData.payment_type,
-        currency: formData.currency,
+        currency: formData.currency || 'KES',
         hourly_rate_min: formData.payment_type === 'Hourly' && formData.hourly_rate_min ? parseFloat(formData.hourly_rate_min) : null,
         hourly_rate_max: formData.payment_type === 'Hourly' && formData.hourly_rate_max ? parseFloat(formData.hourly_rate_max) : null,
         fixed_budget: formData.payment_type === 'Fixed Budget' && formData.fixed_budget ? parseFloat(formData.fixed_budget) : null,
         positions_count: parseInt(formData.positions_count, 10) || 1,
         application_deadline: formData.application_deadline || null,
         expected_duration: formData.expected_duration || null,
-        minimum_competency: formData.minimum_competency,
-        required_certification_id: formData.required_certification_id ? parseInt(formData.required_certification_id, 10) : null,
         minimum_experience_months: parseInt(formData.minimum_experience_months, 10) || 0,
+        required_certification_ids: formData.required_certification_ids.map(id => parseInt(id, 10)).filter(Boolean),
+        required_certification_id: formData.required_certification_ids.length > 0 ? parseInt(formData.required_certification_ids[0], 10) : null,
         exam_required: Boolean(formData.exam_required),
-        exam_id: formData.exam_required && formData.exam_id ? parseInt(formData.exam_id, 10) : null,
+        required_topic_ids: formData.exam_required ? formData.required_topic_ids.map(id => parseInt(id, 10)).filter(Boolean) : [],
         status: targetStatus
       };
 
@@ -342,9 +356,8 @@ export const CreateTaskPage = () => {
 
       setIsDirty(false);
 
-      // Return to task catalog after brief confirmation
       setTimeout(() => {
-        navigate('/admin/dashboard');
+        navigate('/workforce/dashboard');
       }, 1200);
 
     } catch (err) {
@@ -361,31 +374,85 @@ export const CreateTaskPage = () => {
     if (isDirty) {
       setIsCancelModalOpen(true);
     } else {
-      navigate('/admin/dashboard');
+      navigate('/workforce/dashboard');
     }
   };
 
-  // Selected Category & Certification info for badges
+  // Selected Category & Metadata Lookups
   const selectedCategory = metadata.categories.find(c => String(c.category_id) === String(formData.category_id));
-  const selectedCert = metadata.certifications.find(c => String(c.certification_id) === String(formData.required_certification_id));
-  const categoryExams = metadata.exams.filter(e => String(e.category_id) === String(formData.category_id));
-  const selectedExam = metadata.exams.find(e => String(e.exam_id) === String(formData.exam_id));
+
+  const selectedCerts = useMemo(() => {
+    return (metadata.certifications || []).filter(c => 
+      formData.required_certification_ids.includes(String(c.certification_id))
+    );
+  }, [metadata.certifications, formData.required_certification_ids]);
+
+  const filteredCerts = useMemo(() => {
+    if (!certSearch.trim()) return metadata.certifications || [];
+    const term = certSearch.toLowerCase();
+    return (metadata.certifications || []).filter(c => 
+      c.certification_name?.toLowerCase().includes(term) ||
+      c.description?.toLowerCase().includes(term)
+    );
+  }, [metadata.certifications, certSearch]);
+
+  const availableTopics = useMemo(() => {
+    if (metadata.topics && metadata.topics.length > 0) {
+      return metadata.topics;
+    }
+    return (metadata.exams || []).map(e => ({
+      topic_id: e.exam_id,
+      topic_name: e.exam_name,
+      category_name: e.category_name,
+      description: e.description,
+      passing_score: e.passing_score || 70.0,
+      estimated_minutes: 15
+    }));
+  }, [metadata.topics, metadata.exams]);
+
+  const selectedTopics = useMemo(() => {
+    return availableTopics.filter(top => 
+      formData.required_topic_ids.includes(String(top.topic_id))
+    );
+  }, [availableTopics, formData.required_topic_ids]);
+
+  // Officer display name
+  const rawOfficerName = user?.full_name || user?.fullName || 'Workforce Officer';
+  const officerName = rawOfficerName.replace(/\s*\(Verified\)/gi, '').trim();
+  const officerInitials = officerName
+    ? officerName.split(' ').filter(Boolean).map(n => n[0]).join('').substring(0, 2).toUpperCase()
+    : 'WO';
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] flex flex-col font-sans">
+    <div className="min-h-screen bg-[#070b14] text-[#e8ebf7] flex flex-col font-sans relative selection:bg-[#5a69f0]/40 selection:text-white">
+      {/* Ambient background glows */}
+      <div className="fixed inset-0 pointer-events-none z-0">
+        <div className="absolute top-0 left-1/4 w-[600px] h-[400px] bg-indigo-600/6 blur-[140px] rounded-full" />
+        <div className="absolute top-1/3 right-10 w-[500px] h-[350px] bg-blue-500/5 blur-[130px] rounded-full" />
+      </div>
+
       {/* Top Header */}
-      <header className="h-16 bg-white border-b border-slate-200/80 px-6 sm:px-8 flex items-center justify-between shrink-0 sticky top-0 z-20">
+      <header className="h-16 bg-[#080d1a]/95 border-b border-[#1b2542] px-6 sm:px-8 flex items-center justify-between shrink-0 sticky top-0 z-30 backdrop-blur-md">
         <div className="flex items-center gap-4">
-          <Link to="/admin/dashboard" className="flex items-center gap-2 text-slate-500 hover:text-slate-900 transition-colors">
-            <BrandLogo />
+          <Link to="/workforce/dashboard" className="flex items-center gap-2.5 text-white hover:text-indigo-300 transition-colors">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#4b5bd8] to-[#6f7dff] flex items-center justify-center p-1.5 shadow-lg shadow-indigo-500/25 shrink-0">
+              <svg viewBox="0 0 28 28" fill="none" className="w-full h-full text-white">
+                <path d="M6 8V18C6 20.2091 7.79086 22 10 22H20" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+                <path d="M10 17L15 13L21 16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                <circle cx="10" cy="17" r="2.2" fill="currentColor" />
+                <circle cx="15" cy="13" r="2.2" fill="currentColor" />
+                <circle cx="21" cy="16" r="2.2" fill="currentColor" />
+              </svg>
+            </div>
+            <span className="font-sora text-base sm:text-lg font-bold text-white tracking-tight">VerifyMesh</span>
           </Link>
-          <div className="hidden sm:flex items-center gap-2 text-xs text-slate-400">
+          <div className="hidden sm:flex items-center gap-2 text-xs text-slate-500">
             <span>/</span>
-            <span>Admin Portal</span>
+            <span>Workforce Portal</span>
             <span>/</span>
             <span>Tasks</span>
             <span>/</span>
-            <span className="font-semibold text-slate-700">
+            <span className="font-semibold text-slate-300">
               {isEditMode ? `Edit Task #${taskId}` : 'Create New Task'}
             </span>
           </div>
@@ -395,173 +462,168 @@ export const CreateTaskPage = () => {
           <button
             type="button"
             onClick={handleCancelClick}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-300 hover:text-white bg-[#151f38]/60 hover:bg-[#151f38] border border-[#1e2a4a] transition-all cursor-pointer"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
             Back to Catalog
           </button>
-          <div className="w-8 h-8 rounded-full bg-[#E0E7FF] text-[#3B50BA] font-bold text-xs flex items-center justify-center">
-            {user?.fullName ? user.fullName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() : 'AD'}
+          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 text-white font-bold text-xs flex items-center justify-center shadow-xs">
+            {officerInitials}
           </div>
         </div>
       </header>
 
       {/* Main Container */}
-      <main className="flex-1 py-8 px-4 sm:px-6 lg:px-8 max-w-4xl w-full mx-auto space-y-6">
+      <main className="flex-1 py-8 px-4 sm:px-6 lg:px-8 max-w-4xl w-full mx-auto space-y-6 relative z-10">
         {/* Page Title & Status Banner */}
-        <div className="bg-white rounded-2xl p-6 sm:p-7 border border-slate-200/80 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="bg-[#0b1020] rounded-2xl p-6 sm:p-7 border border-[#1b2542] shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-[11px] font-bold text-[#3B50BA] tracking-wider uppercase">
-                TASK MARKETPLACE &bull; WORKFORCE ALLOCATION
+              <span className="text-[11px] font-bold text-indigo-400 tracking-wider uppercase">
+                WORKFORCE ALLOCATION &bull; TASK SPECIFICATION
               </span>
               <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
                 formData.status === 'ACTIVE' 
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
-                  : 'bg-amber-50 text-amber-700 border-amber-200'
+                  ? 'bg-emerald-950/60 text-emerald-400 border-emerald-500/40' 
+                  : 'bg-amber-950/60 text-amber-300 border-amber-500/40'
               }`}>
                 {isEditMode ? `Mode: Editing (${formData.status})` : 'New Task Formulation'}
               </span>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mt-1 tracking-tight">
+            <h1 className="text-2xl sm:text-3xl font-bold font-sora text-white mt-1 tracking-tight">
               {isEditMode ? 'Edit Task Specifications' : 'Create Task Specification'}
             </h1>
-            <p className="text-xs sm:text-sm text-slate-500 mt-1">
-              Define deliverable requirements, compensation structure, eligibility thresholds, and automated qualification rules.
+            <p className="text-xs sm:text-sm text-slate-400 mt-1">
+              Define task deliverables, compensation parameters, mandatory qualifications, and prerequisite assessment topics.
             </p>
-          </div>
-
-          <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setIsPreviewOpen(true)}
-              className="text-xs"
-            >
-              <Eye className="w-3.5 h-3.5 mr-1.5 text-slate-500" />
-              Preview Card
-            </Button>
           </div>
         </div>
 
-        {/* Global Notifications */}
+        {/* Global Alert / Feedback */}
         {formError && (
-          <Alert type="error" message={formError} onClose={() => setFormError(null)} />
+          <div className="p-4 rounded-xl bg-rose-950/30 border border-rose-500/40 flex items-start gap-3 animate-in fade-in duration-200">
+            <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-rose-200">Task Submission Error</p>
+              <p className="text-xs text-rose-300 mt-0.5 leading-relaxed">{formError}</p>
+            </div>
+          </div>
         )}
+
         {formSuccess && (
-          <Alert type="success" message={formSuccess} onClose={() => setFormSuccess(null)} />
+          <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/40 flex items-start gap-3 animate-in fade-in duration-200">
+            <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-emerald-200">Success</p>
+              <p className="text-xs text-emerald-300 mt-0.5 leading-relaxed">{formSuccess}</p>
+            </div>
+          </div>
         )}
 
         {isLoading ? (
-          <div className="bg-white rounded-2xl border border-slate-200/80 p-12 text-center shadow-xs">
-            <div className="w-8 h-8 border-3 border-[#3B50BA] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-            <p className="text-sm font-semibold text-slate-700">Loading Task Details...</p>
+          <div className="py-20 text-center">
+            <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+            <p className="text-sm text-slate-400">Loading task specification and metadata...</p>
           </div>
         ) : (
-          <form className="space-y-6" onSubmit={(e) => e.preventDefault()}>
+          <form onSubmit={(e) => e.preventDefault()} className="space-y-6">
+
             {/* ========================================================= */}
             {/* SECTION A: TASK OVERVIEW */}
             {/* ========================================================= */}
-            <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-7 shadow-xs space-y-5">
-              <div className="flex items-center gap-2.5 pb-4 border-b border-slate-100">
-                <div className="w-8 h-8 rounded-lg bg-blue-50 text-[#3B50BA] flex items-center justify-center font-bold text-xs">
+            <div className="bg-[#0b1020] rounded-2xl border border-[#1b2542] p-6 sm:p-7 shadow-xl space-y-5">
+              <div className="flex items-center gap-2.5 pb-4 border-b border-[#1b2542]">
+                <div className="w-8 h-8 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 flex items-center justify-center font-bold text-xs font-sora">
                   A
                 </div>
                 <div>
-                  <h2 className="text-base sm:text-lg font-bold text-slate-900">Task Overview</h2>
-                  <p className="text-xs text-slate-500">Essential role identity, domain classification, and execution arrangement.</p>
+                  <h2 className="text-base sm:text-lg font-bold font-sora text-white">Task Overview</h2>
+                  <p className="text-xs text-slate-400">
+                    Provide the essential information about the task and what the assigned agents will be expected to do.
+                  </p>
                 </div>
               </div>
 
               {/* Task Title */}
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-semibold text-slate-700">
-                    Task Title <span className="text-rose-500">*</span>
+                  <label className="text-xs font-semibold text-slate-300">
+                    Task Title <span className="text-rose-400">*</span>
                   </label>
-                  <span className="text-[11px] text-slate-400 font-mono">
+                  <span className="text-[11px] text-slate-500 font-mono">
                     {formData.task_name.length}/150
                   </span>
                 </div>
                 <input
                   type="text"
                   maxLength={150}
-                  placeholder="e.g. Enterprise Escalation Specialist"
+                  placeholder="e.g. Customer Support Representative"
                   value={formData.task_name}
                   onChange={(e) => updateField('task_name', e.target.value)}
-                  className={`w-full px-3.5 py-2.5 rounded-xl border text-sm focus:outline-none transition-colors ${
-                    inlineErrors.task_name 
-                      ? 'border-rose-400 focus:border-rose-500 bg-rose-50/20' 
-                      : 'border-slate-200 focus:border-[#3B50BA]'
+                  className={`w-full px-3.5 py-2.5 rounded-xl border text-sm transition-all focus:outline-none ${
+                    inlineErrors.task_name
+                      ? 'border-rose-500/60 bg-rose-950/20 text-white placeholder:text-rose-300 focus:border-rose-500'
+                      : 'bg-[#0d1428] border-[#1e2a4a] text-white placeholder:text-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/40'
                   }`}
                 />
-                {inlineErrors.task_name ? (
-                  <p className="text-xs text-rose-600 mt-1 flex items-center gap-1">
+                {inlineErrors.task_name && (
+                  <p className="text-xs text-rose-400 mt-1 flex items-center gap-1">
                     <AlertCircle className="w-3.5 h-3.5" />
                     {inlineErrors.task_name}
-                  </p>
-                ) : (
-                  <p className="text-[11px] text-slate-400 mt-1">
-                    Provide a descriptive business title (avoid generic names like "Task 1").
                   </p>
                 )}
               </div>
 
-              {/* Category & Work Arrangement Grid */}
+              {/* Category & Work Arrangement */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {/* Category */}
+                {/* Category Dropdown */}
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Task Category <span className="text-rose-500">*</span>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Task Category <span className="text-rose-400">*</span>
                   </label>
                   <select
                     value={formData.category_id}
                     onChange={(e) => updateField('category_id', e.target.value)}
-                    className={`w-full px-3.5 py-2.5 rounded-xl border text-sm focus:outline-none bg-white transition-colors ${
+                    className={`w-full px-3.5 py-2.5 rounded-xl border text-sm transition-all focus:outline-none ${
                       inlineErrors.category_id
-                        ? 'border-rose-400 focus:border-rose-500 bg-rose-50/20'
-                        : 'border-slate-200 focus:border-[#3B50BA]'
+                        ? 'border-rose-500/60 bg-rose-950/20 text-white focus:border-rose-500'
+                        : 'bg-[#0d1428] border-[#1e2a4a] text-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/40'
                     }`}
                   >
-                    <option value="">Select Domain Category</option>
-                    {metadata.categories.map((c) => (
-                      <option key={c.category_id} value={c.category_id}>
-                        {c.category_name}
+                    <option value="" className="bg-[#0d1428] text-slate-400">Select Supported Category</option>
+                    {metadata.categories.map((cat) => (
+                      <option key={cat.category_id} value={cat.category_id} className="bg-[#0d1428] text-white">
+                        {cat.category_name}
                       </option>
                     ))}
                   </select>
                   {inlineErrors.category_id && (
-                    <p className="text-xs text-rose-600 mt-1 flex items-center gap-1">
+                    <p className="text-xs text-rose-400 mt-1 flex items-center gap-1">
                       <AlertCircle className="w-3.5 h-3.5" />
                       {inlineErrors.category_id}
-                    </p>
-                  )}
-                  {selectedCategory && (
-                    <p className="text-[11px] text-slate-500 mt-1 italic">
-                      {selectedCategory.description}
                     </p>
                   )}
                 </div>
 
                 {/* Work Arrangement */}
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Work Arrangement <span className="text-rose-500">*</span>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Work Arrangement <span className="text-rose-400">*</span>
                   </label>
                   <div className="grid grid-cols-3 gap-2">
                     {[
-                      { id: 'Remote', label: 'Remote', icon: Globe },
-                      { id: 'Hybrid', label: 'Hybrid', icon: Building },
-                      { id: 'On-site', label: 'On-site', icon: MapPin }
-                    ].map(({ id, label, icon: Icon }) => (
+                      { val: 'Remote', label: 'Remote', icon: Globe },
+                      { val: 'Hybrid', label: 'Hybrid', icon: Building },
+                      { val: 'On-site', label: 'On-site', icon: MapPin }
+                    ].map(({ val, label, icon: Icon }) => (
                       <button
-                        key={id}
+                        key={val}
                         type="button"
-                        onClick={() => updateField('work_arrangement', id)}
-                        className={`flex flex-col items-center justify-center p-2 rounded-xl border text-xs font-semibold transition-all ${
-                          formData.work_arrangement === id
-                            ? 'bg-[#EEF2FF] text-[#3B50BA] border-[#3B50BA] shadow-xs'
-                            : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                        onClick={() => updateField('work_arrangement', val)}
+                        className={`flex flex-col items-center justify-center py-2 px-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
+                          formData.work_arrangement === val
+                            ? 'bg-indigo-600/25 border-indigo-500/60 text-white shadow-xs'
+                            : 'bg-[#0d1428] border-[#1e2a4a] text-slate-400 hover:text-slate-200 hover:border-[#2b3a67]'
                         }`}
                       >
                         <Icon className="w-4 h-4 mb-1" />
@@ -575,22 +637,22 @@ export const CreateTaskPage = () => {
               {/* Location (conditional when Hybrid or On-site) */}
               {formData.work_arrangement !== 'Remote' && (
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Location / Eligible Region <span className="text-rose-500">*</span>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Location / Eligible Region <span className="text-rose-400">*</span>
                   </label>
                   <input
                     type="text"
                     placeholder="e.g. Nairobi Central Hub / Kenya Regional Offices"
                     value={formData.location}
                     onChange={(e) => updateField('location', e.target.value)}
-                    className={`w-full px-3.5 py-2.5 rounded-xl border text-sm focus:outline-none transition-colors ${
+                    className={`w-full px-3.5 py-2.5 rounded-xl border text-sm transition-all focus:outline-none ${
                       inlineErrors.location
-                        ? 'border-rose-400 focus:border-rose-500 bg-rose-50/20'
-                        : 'border-slate-200 focus:border-[#3B50BA]'
+                        ? 'border-rose-500/60 bg-rose-950/20 text-white placeholder:text-rose-300 focus:border-rose-500'
+                        : 'bg-[#0d1428] border-[#1e2a4a] text-white placeholder:text-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/40'
                     }`}
                   />
                   {inlineErrors.location && (
-                    <p className="text-xs text-rose-600 mt-1 flex items-center gap-1">
+                    <p className="text-xs text-rose-400 mt-1 flex items-center gap-1">
                       <AlertCircle className="w-3.5 h-3.5" />
                       {inlineErrors.location}
                     </p>
@@ -601,53 +663,53 @@ export const CreateTaskPage = () => {
               {/* Detailed Description */}
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-semibold text-slate-700">
-                    Detailed Description <span className="text-rose-500">*</span>
+                  <label className="text-xs font-semibold text-slate-300">
+                    Detailed Description <span className="text-rose-400">*</span>
                   </label>
-                  <span className="text-[11px] text-slate-400 font-mono">
+                  <span className="text-[11px] text-slate-500 font-mono">
                     {formData.description.length} chars (min 20)
                   </span>
                 </div>
                 <textarea
                   rows={4}
-                  placeholder="Comprehensive description of the engagement scope, day-to-day responsibilities, and team collaboration model..."
+                  placeholder="Explain the purpose, scope and nature of the task..."
                   value={formData.description}
                   onChange={(e) => updateField('description', e.target.value)}
-                  className={`w-full px-3.5 py-2.5 rounded-xl border text-sm focus:outline-none transition-colors ${
+                  className={`w-full px-3.5 py-2.5 rounded-xl border text-sm transition-all focus:outline-none ${
                     inlineErrors.description
-                      ? 'border-rose-400 focus:border-rose-500 bg-rose-50/20'
-                      : 'border-slate-200 focus:border-[#3B50BA]'
+                      ? 'border-rose-500/60 bg-rose-950/20 text-white placeholder:text-rose-300 focus:border-rose-500'
+                      : 'bg-[#0d1428] border-[#1e2a4a] text-white placeholder:text-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/40'
                   }`}
                 />
                 {inlineErrors.description && (
-                  <p className="text-xs text-rose-600 mt-1 flex items-center gap-1">
+                  <p className="text-xs text-rose-400 mt-1 flex items-center gap-1">
                     <AlertCircle className="w-3.5 h-3.5" />
                     {inlineErrors.description}
                   </p>
                 )}
               </div>
 
-              {/* Deliverables & Expected Outcomes */}
+              {/* Responsibilities & Expected Deliverables */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
                   Responsibilities &amp; Expected Deliverables
                 </label>
                 <textarea
                   rows={3}
-                  placeholder="e.g. - Maintain >95% First-Contact Resolution&#10;- Resolve up to 25 ticket escalations weekly&#10;- File weekly incident post-mortem documentation"
+                  placeholder="Describe concrete responsibilities and expected outputs (e.g.&#10;- Respond to customer enquiries within SLA&#10;- Resolve support tickets promptly&#10;- Submit weekly activity reports)"
                   value={formData.deliverables}
                   onChange={(e) => updateField('deliverables', e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA]"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d1428] border border-[#1e2a4a] text-white placeholder:text-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/40 transition-all"
                 />
-                <p className="text-[11px] text-slate-400 mt-1">
-                  Bullet points outlining concrete milestones or qualitative standards expected from the assigned agent.
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Clear outline of responsibilities, operational deliverables, and qualitative standards.
                 </p>
               </div>
 
-              {/* Required Skills Chips */}
+              {/* Relevant Skills & Keywords */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Required Competency Skills &amp; Keywords
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Relevant Skills &amp; Keywords
                 </label>
                 <div className="flex gap-2 mb-2">
                   <input
@@ -661,16 +723,15 @@ export const CreateTaskPage = () => {
                         handleAddSkill();
                       }
                     }}
-                    className="flex-1 px-3.5 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA]"
+                    className="flex-1 px-3.5 py-2 rounded-xl bg-[#0d1428] border border-[#1e2a4a] text-white placeholder:text-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/40 transition-all"
                   />
-                  <Button
-                    variant="secondary"
-                    size="sm"
+                  <button
                     onClick={() => handleAddSkill()}
                     type="button"
+                    className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#151f38] hover:bg-[#1c294d] text-white border border-[#2b3a67] flex items-center gap-1 transition-all cursor-pointer"
                   >
-                    <Plus className="w-3.5 h-3.5 mr-1" /> Add
-                  </Button>
+                    <Plus className="w-3.5 h-3.5" /> Add
+                  </button>
                 </div>
 
                 {/* Selected Skills Tags */}
@@ -679,13 +740,13 @@ export const CreateTaskPage = () => {
                     {formData.required_skills.map((skill) => (
                       <span
                         key={skill}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 text-[#3B50BA] border border-blue-100 text-xs font-semibold"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-950/60 text-indigo-300 border border-indigo-500/40 text-xs font-semibold"
                       >
                         {skill}
                         <button
                           type="button"
                           onClick={() => handleRemoveSkill(skill)}
-                          className="hover:text-rose-600 transition-colors"
+                          className="hover:text-rose-400 transition-colors cursor-pointer"
                         >
                           <X className="w-3 h-3" />
                         </button>
@@ -694,77 +755,86 @@ export const CreateTaskPage = () => {
                   </div>
                 )}
 
-                {/* Popular Skill Presets */}
+                {/* Suggestions */}
                 <div className="flex items-center gap-1.5 flex-wrap pt-1">
-                  <span className="text-[11px] text-slate-400 font-medium">Suggestions:</span>
+                  <span className="text-[11px] text-slate-500 font-medium">Suggestions:</span>
                   {SKILL_SUGGESTIONS.map((s) => (
                     <button
                       key={s}
                       type="button"
                       onClick={() => handleAddSkill(s)}
                       disabled={formData.required_skills.includes(s)}
-                      className="text-[11px] px-2 py-0.5 rounded-full border border-slate-200 text-slate-600 hover:border-slate-300 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                      className="text-[11px] px-2.5 py-0.5 rounded-full bg-[#0d1428] border border-[#1e2a4a] text-slate-400 hover:text-white hover:border-indigo-500/50 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer"
                     >
                       + {s}
                     </button>
                   ))}
                 </div>
+                <p className="text-[10px] text-slate-500 mt-1.5 italic">
+                  * Descriptive task tags only. These do not independently gate qualification.
+                </p>
               </div>
             </div>
 
             {/* ========================================================= */}
             {/* SECTION B: COMPENSATION AND AVAILABILITY */}
             {/* ========================================================= */}
-            <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-7 shadow-xs space-y-5">
-              <div className="flex items-center gap-2.5 pb-4 border-b border-slate-100">
-                <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold text-xs">
+            <div className="bg-[#0b1020] rounded-2xl border border-[#1b2542] p-6 sm:p-7 shadow-xl space-y-5">
+              <div className="flex items-center gap-2.5 pb-4 border-b border-[#1b2542]">
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center justify-center font-bold text-xs font-sora">
                   B
                 </div>
                 <div>
-                  <h2 className="text-base sm:text-lg font-bold text-slate-900">Compensation &amp; Availability</h2>
-                  <p className="text-xs text-slate-500">Define remuneration structure, quota capacity, and application window.</p>
+                  <h2 className="text-base sm:text-lg font-bold font-sora text-white">Compensation &amp; Availability</h2>
+                  <p className="text-xs text-slate-400">
+                    Define how the agent will be compensated, the number of available positions and the engagement period.
+                  </p>
                 </div>
               </div>
 
               {/* Payment Type Selector */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Payment Type <span className="text-rose-500">*</span>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Payment Type <span className="text-rose-400">*</span>
                 </label>
                 <div className="grid grid-cols-2 gap-3">
                   <button
                     type="button"
                     onClick={() => updateField('payment_type', 'Hourly')}
-                    className={`flex items-center gap-3 p-3.5 rounded-xl border text-left transition-all ${
+                    className={`flex items-center gap-3 p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
                       formData.payment_type === 'Hourly'
-                        ? 'bg-[#EEF2FF] text-[#3B50BA] border-[#3B50BA] shadow-xs'
-                        : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                        ? 'bg-indigo-600/20 text-white border-indigo-500/60 shadow-sm'
+                        : 'bg-[#0d1428] text-slate-400 border-[#1e2a4a] hover:border-[#2b3a67] hover:text-slate-200'
                     }`}
                   >
-                    <div className="w-8 h-8 rounded-lg bg-blue-100/60 text-[#3B50BA] flex items-center justify-center shrink-0">
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                      formData.payment_type === 'Hourly' ? 'bg-indigo-500/25 text-indigo-400' : 'bg-[#151f38] text-slate-400'
+                    }`}>
                       <Clock className="w-4 h-4" />
                     </div>
                     <div>
-                      <p className="text-xs font-bold">Hourly Rate Model</p>
-                      <p className="text-[11px] text-slate-500">Compensate per verified logged hour</p>
+                      <p className="text-xs font-bold text-white">Hourly Rate</p>
+                      <p className="text-[11px] text-slate-400">Compensate per verified logged hour</p>
                     </div>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => updateField('payment_type', 'Fixed Budget')}
-                    className={`flex items-center gap-3 p-3.5 rounded-xl border text-left transition-all ${
+                    className={`flex items-center gap-3 p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
                       formData.payment_type === 'Fixed Budget'
-                        ? 'bg-[#EEF2FF] text-[#3B50BA] border-[#3B50BA] shadow-xs'
-                        : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                        ? 'bg-indigo-600/20 text-white border-indigo-500/60 shadow-sm'
+                        : 'bg-[#0d1428] text-slate-400 border-[#1e2a4a] hover:border-[#2b3a67] hover:text-slate-200'
                     }`}
                   >
-                    <div className="w-8 h-8 rounded-lg bg-blue-100/60 text-[#3B50BA] flex items-center justify-center shrink-0">
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                      formData.payment_type === 'Fixed Budget' ? 'bg-indigo-500/25 text-indigo-400' : 'bg-[#151f38] text-slate-400'
+                    }`}>
                       <DollarSign className="w-4 h-4" />
                     </div>
                     <div>
-                      <p className="text-xs font-bold">Fixed Project Budget</p>
-                      <p className="text-[11px] text-slate-500">Total milestone allocation</p>
+                      <p className="text-xs font-bold text-white">Fixed Project Budget</p>
+                      <p className="text-[11px] text-slate-400">Total milestone allocation</p>
                     </div>
                   </button>
                 </div>
@@ -773,26 +843,23 @@ export const CreateTaskPage = () => {
               {/* Currency & Compensation Amounts */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Currency <span className="text-rose-500">*</span>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Currency <span className="text-rose-400">*</span>
                   </label>
                   <select
                     value={formData.currency}
                     onChange={(e) => updateField('currency', e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA] bg-white font-semibold"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d1428] border border-[#1e2a4a] text-white focus:outline-none focus:border-indigo-500 text-sm font-semibold transition-all"
                   >
-                    <option value="KES">KES (Kenyan Shilling)</option>
-                    <option value="USD">USD ($)</option>
-                    <option value="EUR">EUR (€)</option>
-                    <option value="GBP">GBP (£)</option>
+                    <option value="KES" className="bg-[#0d1428] text-white">KES (Kenyan Shilling) — Standard</option>
                   </select>
                 </div>
 
                 {formData.payment_type === 'Hourly' ? (
                   <>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Min Hourly Rate ({formData.currency}) <span className="text-rose-500">*</span>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        Minimum Hourly Rate ({formData.currency}) <span className="text-rose-400">*</span>
                       </label>
                       <input
                         type="number"
@@ -801,14 +868,14 @@ export const CreateTaskPage = () => {
                         placeholder="e.g. 2500"
                         value={formData.hourly_rate_min}
                         onChange={(e) => updateField('hourly_rate_min', e.target.value)}
-                        className={`w-full px-3.5 py-2.5 rounded-xl border text-sm focus:outline-none transition-colors ${
+                        className={`w-full px-3.5 py-2.5 rounded-xl border text-sm transition-all focus:outline-none ${
                           inlineErrors.hourly_rate_min
-                            ? 'border-rose-400 focus:border-rose-500 bg-rose-50/20'
-                            : 'border-slate-200 focus:border-[#3B50BA]'
+                            ? 'border-rose-500/60 bg-rose-950/20 text-white placeholder:text-rose-300 focus:border-rose-500'
+                            : 'bg-[#0d1428] border-[#1e2a4a] text-white placeholder:text-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/40'
                         }`}
                       />
                       {inlineErrors.hourly_rate_min && (
-                        <p className="text-xs text-rose-600 mt-1 flex items-center gap-1">
+                        <p className="text-xs text-rose-400 mt-1 flex items-center gap-1">
                           <AlertCircle className="w-3.5 h-3.5" />
                           {inlineErrors.hourly_rate_min}
                         </p>
@@ -816,8 +883,8 @@ export const CreateTaskPage = () => {
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Max Hourly Rate ({formData.currency})
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        Maximum Hourly Rate ({formData.currency})
                       </label>
                       <input
                         type="number"
@@ -826,14 +893,14 @@ export const CreateTaskPage = () => {
                         placeholder="e.g. 4500 (Optional)"
                         value={formData.hourly_rate_max}
                         onChange={(e) => updateField('hourly_rate_max', e.target.value)}
-                        className={`w-full px-3.5 py-2.5 rounded-xl border text-sm focus:outline-none transition-colors ${
+                        className={`w-full px-3.5 py-2.5 rounded-xl border text-sm transition-all focus:outline-none ${
                           inlineErrors.hourly_rate_max
-                            ? 'border-rose-400 focus:border-rose-500 bg-rose-50/20'
-                            : 'border-slate-200 focus:border-[#3B50BA]'
+                            ? 'border-rose-500/60 bg-rose-950/20 text-white placeholder:text-rose-300 focus:border-rose-500'
+                            : 'bg-[#0d1428] border-[#1e2a4a] text-white placeholder:text-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/40'
                         }`}
                       />
                       {inlineErrors.hourly_rate_max && (
-                        <p className="text-xs text-rose-600 mt-1 flex items-center gap-1">
+                        <p className="text-xs text-rose-400 mt-1 flex items-center gap-1">
                           <AlertCircle className="w-3.5 h-3.5" />
                           {inlineErrors.hourly_rate_max}
                         </p>
@@ -842,8 +909,8 @@ export const CreateTaskPage = () => {
                   </>
                 ) : (
                   <div className="sm:col-span-2">
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Total Fixed Budget ({formData.currency}) <span className="text-rose-500">*</span>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      Total Project Budget ({formData.currency}) <span className="text-rose-400">*</span>
                     </label>
                     <input
                       type="number"
@@ -852,14 +919,14 @@ export const CreateTaskPage = () => {
                       placeholder="e.g. 120000"
                       value={formData.fixed_budget}
                       onChange={(e) => updateField('fixed_budget', e.target.value)}
-                      className={`w-full px-3.5 py-2.5 rounded-xl border text-sm focus:outline-none transition-colors ${
+                      className={`w-full px-3.5 py-2.5 rounded-xl border text-sm transition-all focus:outline-none ${
                         inlineErrors.fixed_budget
-                          ? 'border-rose-400 focus:border-rose-500 bg-rose-50/20'
-                          : 'border-slate-200 focus:border-[#3B50BA]'
+                          ? 'border-rose-500/60 bg-rose-950/20 text-white placeholder:text-rose-300 focus:border-rose-500'
+                          : 'bg-[#0d1428] border-[#1e2a4a] text-white placeholder:text-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/40'
                       }`}
                     />
                     {inlineErrors.fixed_budget && (
-                      <p className="text-xs text-rose-600 mt-1 flex items-center gap-1">
+                      <p className="text-xs text-rose-400 mt-1 flex items-center gap-1">
                         <AlertCircle className="w-3.5 h-3.5" />
                         {inlineErrors.fixed_budget}
                       </p>
@@ -869,11 +936,11 @@ export const CreateTaskPage = () => {
               </div>
 
               {/* Positions Count, Deadline & Expected Duration */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 border-t border-slate-100">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 border-t border-[#1b2542]">
                 {/* Positions */}
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Available Positions <span className="text-rose-500">*</span>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Available Positions <span className="text-rose-400">*</span>
                   </label>
                   <div className="relative">
                     <input
@@ -881,33 +948,33 @@ export const CreateTaskPage = () => {
                       min="1"
                       value={formData.positions_count}
                       onChange={(e) => updateField('positions_count', Math.max(1, parseInt(e.target.value, 10) || 1))}
-                      className="w-full pl-9 pr-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA]"
+                      className="w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-[#0d1428] border border-[#1e2a4a] text-white text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/40 transition-all"
                     />
-                    <Users className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <Users className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                   </div>
-                  <p className="text-[11px] text-slate-400 mt-1">Number of agents to assign</p>
+                  <p className="text-[11px] text-slate-500 mt-1">Maximum assignable candidates</p>
                 </div>
 
                 {/* Application Deadline */}
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Application Deadline <span className="text-rose-500">*</span>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Application Deadline <span className="text-rose-400">*</span>
                   </label>
                   <div className="relative">
                     <input
                       type="date"
                       value={formData.application_deadline}
                       onChange={(e) => updateField('application_deadline', e.target.value)}
-                      className={`w-full pl-9 pr-3.5 py-2.5 rounded-xl border text-sm focus:outline-none transition-colors ${
+                      className={`w-full pl-9 pr-3.5 py-2.5 rounded-xl border text-sm transition-all focus:outline-none ${
                         inlineErrors.application_deadline
-                          ? 'border-rose-400 focus:border-rose-500 bg-rose-50/20'
-                          : 'border-slate-200 focus:border-[#3B50BA]'
+                          ? 'border-rose-500/60 bg-rose-950/20 text-white focus:border-rose-500'
+                          : 'bg-[#0d1428] border-[#1e2a4a] text-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/40'
                       }`}
                     />
-                    <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <Calendar className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                   </div>
                   {inlineErrors.application_deadline ? (
-                    <p className="text-xs text-rose-600 mt-1 flex items-center gap-1">
+                    <p className="text-xs text-rose-400 mt-1 flex items-center gap-1">
                       <AlertCircle className="w-3.5 h-3.5" />
                       {inlineErrors.application_deadline}
                     </p>
@@ -916,25 +983,25 @@ export const CreateTaskPage = () => {
                       <button
                         type="button"
                         onClick={() => setDeadlinePreset(14)}
-                        className="text-[10px] text-slate-500 hover:text-[#3B50BA] underline"
+                        className="text-[10px] text-indigo-400 hover:text-indigo-300 underline cursor-pointer"
                       >
-                        +14d
+                        +14 days
                       </button>
-                      <span className="text-[10px] text-slate-300">&bull;</span>
+                      <span className="text-[10px] text-slate-600">&bull;</span>
                       <button
                         type="button"
                         onClick={() => setDeadlinePreset(30)}
-                        className="text-[10px] text-slate-500 hover:text-[#3B50BA] underline"
+                        className="text-[10px] text-indigo-400 hover:text-indigo-300 underline cursor-pointer"
                       >
-                        +30d
+                        +30 days
                       </button>
-                      <span className="text-[10px] text-slate-300">&bull;</span>
+                      <span className="text-[10px] text-slate-600">&bull;</span>
                       <button
                         type="button"
                         onClick={() => setDeadlinePreset(60)}
-                        className="text-[10px] text-slate-500 hover:text-[#3B50BA] underline"
+                        className="text-[10px] text-indigo-400 hover:text-indigo-300 underline cursor-pointer"
                       >
-                        +60d
+                        +60 days
                       </button>
                     </div>
                   )}
@@ -942,21 +1009,21 @@ export const CreateTaskPage = () => {
 
                 {/* Expected Duration */}
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Expected Duration
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Expected Duration <span className="text-rose-400">*</span>
                   </label>
                   <select
                     value={formData.expected_duration}
                     onChange={(e) => updateField('expected_duration', e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA] bg-white"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d1428] border border-[#1e2a4a] text-white text-sm focus:outline-none focus:border-indigo-500 transition-all"
                   >
-                    <option value="1 month">1 Month</option>
-                    <option value="3 months">3 Months</option>
-                    <option value="6 months">6 Months</option>
-                    <option value="12 months">12 Months</option>
-                    <option value="Ongoing / Milestone-based">Ongoing / Milestone-based</option>
+                    <option value="1 month" className="bg-[#0d1428] text-white">1 Month</option>
+                    <option value="3 months" className="bg-[#0d1428] text-white">3 Months</option>
+                    <option value="6 months" className="bg-[#0d1428] text-white">6 Months</option>
+                    <option value="12 months" className="bg-[#0d1428] text-white">12 Months</option>
+                    <option value="Ongoing / Milestone-based" className="bg-[#0d1428] text-white">Ongoing / Milestone-based</option>
                   </select>
-                  <p className="text-[11px] text-slate-400 mt-1">Engagement period</p>
+                  <p className="text-[11px] text-slate-500 mt-1">Engagement timeframe</p>
                 </div>
               </div>
             </div>
@@ -964,131 +1031,206 @@ export const CreateTaskPage = () => {
             {/* ========================================================= */}
             {/* SECTION C: ELIGIBILITY REQUIREMENTS */}
             {/* ========================================================= */}
-            <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-7 shadow-xs space-y-5">
-              <div className="flex items-center gap-2.5 pb-4 border-b border-slate-100">
-                <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-700 flex items-center justify-center font-bold text-xs">
+            <div className="bg-[#0b1020] rounded-2xl border border-[#1b2542] p-6 sm:p-7 shadow-xl space-y-5">
+              <div className="flex items-center gap-2.5 pb-4 border-b border-[#1b2542]">
+                <div className="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20 flex items-center justify-center font-bold text-xs font-sora">
                   C
                 </div>
                 <div>
-                  <h2 className="text-base sm:text-lg font-bold text-slate-900">Eligibility Requirements</h2>
-                  <p className="text-xs text-slate-500">Configure machine learning competency thresholds and mandatory certifications.</p>
-                </div>
-              </div>
-
-              {/* Competency Tier Selector */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-xs font-semibold text-slate-700">
-                    Required Minimum Competency Tier <span className="text-rose-500">*</span>
-                  </label>
-                  <span className="text-[11px] text-slate-400 font-medium">
-                    Evaluated by Random Forest inference
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {COMPETENCY_TIERS.map(({ tier, label, badge, description }) => {
-                    const isSelected = formData.minimum_competency === tier;
-                    return (
-                      <button
-                        key={tier}
-                        type="button"
-                        onClick={() => updateField('minimum_competency', tier)}
-                        className={`p-3.5 rounded-xl border text-left transition-all flex flex-col justify-between ${
-                          isSelected
-                            ? 'bg-[#EEF2FF] border-[#3B50BA] shadow-xs'
-                            : 'bg-white border-slate-200 hover:border-slate-300'
-                        }`}
-                      >
-                        <div>
-                          <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold border mb-2 ${badge}`}>
-                            {label}
-                          </span>
-                          <p className="text-[11px] text-slate-600 leading-relaxed font-normal">
-                            {description}
-                          </p>
-                        </div>
-                        <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] font-semibold">
-                          <span className={isSelected ? 'text-[#3B50BA]' : 'text-slate-400'}>
-                            {isSelected ? 'Selected Tier' : 'Select'}
-                          </span>
-                          {isSelected && <Check className="w-3.5 h-3.5 text-[#3B50BA]" />}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Mandatory Certification Dropdown */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Mandatory Certification Requirement
-                </label>
-                <select
-                  value={formData.required_certification_id}
-                  onChange={(e) => updateField('required_certification_id', e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA] bg-white"
-                >
-                  <option value="">No mandatory certification required (Open Eligibility)</option>
-                  {metadata.certifications.map((cert) => (
-                    <option key={cert.certification_id} value={cert.certification_id}>
-                      {cert.certification_name} {cert.validity_period_months ? `(Valid ${cert.validity_period_months} mos)` : ''}
-                    </option>
-                  ))}
-                </select>
-
-                {selectedCert ? (
-                  <div className="mt-2.5 p-3 rounded-xl bg-emerald-50/60 border border-emerald-200 flex items-start gap-2.5 text-xs">
-                    <Award className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                    <div>
-                      <p className="font-bold text-emerald-900">
-                        Mandatory: {selectedCert.certification_name}
-                      </p>
-                      <p className="text-emerald-700 mt-0.5 leading-relaxed">
-                        {selectedCert.description}
-                      </p>
-                      <p className="text-[11px] text-emerald-800 mt-1 font-semibold">
-                        &bull; Strict Precedence Blocker: Agents without this verified active accreditation are blocked from submitting applications.
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-[11px] text-slate-400 mt-1">
-                    Select a required credential only if the task legally or operationally requires verified compliance.
+                  <h2 className="text-base sm:text-lg font-bold font-sora text-white">Eligibility Requirements</h2>
+                  <p className="text-xs text-slate-400">
+                    Define the mandatory conditions an agent must satisfy before being allowed to apply for the task.
                   </p>
-                )}
+                </div>
               </div>
 
-              {/* Minimum Experience */}
+              {/* 1. Minimum Verified Work Experience */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Minimum Experience (Months)
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Minimum Verified Work Experience
                 </label>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="number"
-                    min="0"
-                    step="3"
-                    value={formData.minimum_experience_months}
-                    onChange={(e) => updateField('minimum_experience_months', Math.max(0, parseInt(e.target.value, 10) || 0))}
-                    className="w-40 px-3.5 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-[#3B50BA]"
-                  />
-                  <div className="flex items-center gap-1">
-                    {[0, 6, 12, 18, 24].map((m) => (
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="relative">
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={formData.minimum_experience_months}
+                      onChange={(e) => updateField('minimum_experience_months', Math.max(0, parseInt(e.target.value, 10) || 0))}
+                      className="w-36 px-3.5 py-2.5 rounded-xl bg-[#0d1428] border border-[#1e2a4a] text-white text-sm focus:outline-none focus:border-indigo-500 transition-all font-mono"
+                    />
+                    <span className="text-xs text-slate-500 absolute right-3 top-1/2 -translate-y-1/2">
+                      months
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {[
+                      { m: 0, label: 'No minimum' },
+                      { m: 6, label: '6 months' },
+                      { m: 12, label: '12 months' },
+                      { m: 18, label: '18 months' },
+                      { m: 24, label: '24 months' }
+                    ].map(({ m, label }) => (
                       <button
                         key={m}
                         type="button"
                         onClick={() => updateField('minimum_experience_months', m)}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all ${
+                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
                           formData.minimum_experience_months === m
-                            ? 'bg-[#EEF2FF] text-[#3B50BA] border-[#3B50BA]'
-                            : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                            ? 'bg-indigo-600/25 text-indigo-300 border-indigo-500/60 shadow-xs'
+                            : 'bg-[#0d1428] text-slate-400 border-[#1e2a4a] hover:border-[#2b3a67] hover:text-slate-200'
                         }`}
                       >
-                        {m === 0 ? 'None' : `${m}m`}
+                        {label}
                       </button>
                     ))}
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1.5">
+                  The system evaluates verified work experience. Unverified, pending, or rejected entries do not qualify.
+                </p>
+              </div>
+
+              {/* 2. Required Certifications (Searchable Multi-select) */}
+              <div className="pt-2 border-t border-[#1b2542] space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-slate-300">
+                    Required Certifications (Accreditation Catalogue)
+                  </label>
+                  {formData.required_certification_ids.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleClearCertifications}
+                      className="text-[11px] text-rose-400 hover:text-rose-300 transition-colors cursor-pointer"
+                    >
+                      Clear all certifications (Open)
+                    </button>
+                  )}
+                </div>
+
+                {/* Selected Certifications Chips */}
+                {selectedCerts.length > 0 ? (
+                  <div className="space-y-2">
+                    <p className="text-[11px] text-slate-400 font-medium">
+                      Mandatory Credentials ({selectedCerts.length} selected — all must be active &amp; verified):
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedCerts.map((cert) => (
+                        <div
+                          key={cert.certification_id}
+                          className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-950/40 text-emerald-300 border border-emerald-500/40 text-xs font-semibold"
+                        >
+                          <Award className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span>{cert.certification_name}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleCertification(cert.certification_id)}
+                            className="text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
+                            title="Remove certification"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 rounded-xl bg-[#0d1428] border border-dashed border-[#1e2a4a] text-slate-400 text-xs flex items-center justify-between">
+                    <span>No mandatory certifications required (Open to all verified agents).</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">Open Gating</span>
+                  </div>
+                )}
+
+                {/* Search & Certification Selection Grid */}
+                <div className="space-y-2">
+                  <div className="relative">
+                    <input
+                      type="text"
+                      placeholder="Search certification catalogue by name or topic..."
+                      value={certSearch}
+                      onChange={(e) => setCertSearch(e.target.value)}
+                      className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-[#0d1428] border border-[#1e2a4a] text-white text-xs focus:outline-none focus:border-indigo-500 transition-all placeholder:text-slate-500"
+                    />
+                    <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  </div>
+
+                  <div className="max-h-48 overflow-y-auto space-y-1.5 p-2 rounded-xl bg-[#080d1a] border border-[#1b2542]">
+                    {filteredCerts.map((cert) => {
+                      const isSelected = formData.required_certification_ids.includes(String(cert.certification_id));
+                      return (
+                        <button
+                          key={cert.certification_id}
+                          type="button"
+                          onClick={() => handleToggleCertification(cert.certification_id)}
+                          className={`w-full text-left p-2.5 rounded-xl border text-xs transition-all flex items-center justify-between cursor-pointer ${
+                            isSelected
+                              ? 'bg-emerald-950/30 border-emerald-500/60 text-white'
+                              : 'bg-[#0d1428] border-[#1e2a4a] text-slate-300 hover:border-[#2b3a67]'
+                          }`}
+                        >
+                          <div className="flex items-start gap-2.5">
+                            <div className={`w-4 h-4 rounded mt-0.5 flex items-center justify-center border transition-all ${
+                              isSelected ? 'bg-emerald-500 border-emerald-400 text-black' : 'border-slate-600 bg-transparent'
+                            }`}>
+                              {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                            </div>
+                            <div>
+                              <p className="font-bold text-white leading-tight">{cert.certification_name}</p>
+                              {cert.description && (
+                                <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">{cert.description}</p>
+                              )}
+                            </div>
+                          </div>
+                          {cert.validity_period_months && (
+                            <span className="text-[10px] text-slate-400 font-medium shrink-0 ml-2">
+                              {cert.validity_period_months}m validity
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <p className="text-[11px] text-slate-500">
+                  Selected certifications must be verified before they satisfy task requirements. Pending and rejected certifications do not qualify an agent.
+                </p>
+              </div>
+
+              {/* 3. Dynamic Eligibility Rule Summary */}
+              <div className="pt-2 border-t border-[#1b2542]">
+                <div className="p-4 rounded-xl bg-[#0d1428] border border-[#1e2a4a] space-y-2.5">
+                  <div className="flex items-center gap-2 text-indigo-400 font-bold text-xs uppercase tracking-wider">
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>Eligibility Rule Summary (Generated Live)</span>
+                  </div>
+
+                  <ul className="text-xs text-slate-300 space-y-1.5 list-disc pl-4">
+                    <li>
+                      <strong>Work Experience:</strong>{' '}
+                      {formData.minimum_experience_months > 0 
+                        ? `Minimum ${formData.minimum_experience_months} months of verified employment tenure required.`
+                        : 'No minimum experience requirement (Open).'}
+                    </li>
+                    <li>
+                      <strong>Accreditation:</strong>{' '}
+                      {selectedCerts.length > 0 
+                        ? `${selectedCerts.length} mandatory certification(s) required (${selectedCerts.map(c => c.certification_name).join(', ')}). All must be active and verified.`
+                        : 'No mandatory certifications required.'}
+                    </li>
+                    <li>
+                      <strong>Competency Assessments:</strong>{' '}
+                      {formData.exam_required 
+                        ? (selectedTopics.length > 0 
+                            ? `Must pass ${selectedTopics.length} assessment topic(s) with at least 70% passing score (${selectedTopics.map(t => t.topic_name).join(', ')}).`
+                            : 'Assessment required; select at least one topic in Section D below.')
+                        : 'No prerequisite assessment required.'}
+                    </li>
+                  </ul>
+
+                  <div className="pt-2 border-t border-[#1e2a4a] text-[11px] text-slate-400">
+                    &bull; The deterministic eligibility engine evaluates all configured mandatory requirements. An agent qualifies only when every applicable requirement is satisfied.
                   </div>
                 </div>
               </div>
@@ -1097,105 +1239,143 @@ export const CreateTaskPage = () => {
             {/* ========================================================= */}
             {/* SECTION D: ASSESSMENT CONFIGURATION */}
             {/* ========================================================= */}
-            <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-7 shadow-xs space-y-5">
-              <div className="flex items-center gap-2.5 pb-4 border-b border-slate-100">
-                <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-700 flex items-center justify-center font-bold text-xs">
+            <div className="bg-[#0b1020] rounded-2xl border border-[#1b2542] p-6 sm:p-7 shadow-xl space-y-5">
+              <div className="flex items-center gap-2.5 pb-4 border-b border-[#1b2542]">
+                <div className="w-8 h-8 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20 flex items-center justify-center font-bold text-xs font-sora">
                   D
                 </div>
                 <div>
-                  <h2 className="text-base sm:text-lg font-bold text-slate-900">Assessment Configuration</h2>
-                  <p className="text-xs text-slate-500">Configure task-specific assessment requirements and server question banks.</p>
-                </div>
-              </div>
-
-              {/* Assessment Switch */}
-              <div className="flex items-center justify-between p-4 rounded-xl bg-slate-50 border border-slate-150">
-                <div>
-                  <h4 className="text-xs sm:text-sm font-bold text-slate-800">
-                    Require Task-Specific Competency Assessment
-                  </h4>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    When enabled, agents must achieve a passing score on the designated assessment battery before applying.
+                  <h2 className="text-base sm:text-lg font-bold font-sora text-white">Assessment Configuration</h2>
+                  <p className="text-xs text-slate-400">
+                    Configure the task-specific assessments agents must pass before applying.
                   </p>
                 </div>
-                <input
-                  type="checkbox"
-                  id="exam_required_toggle"
-                  checked={formData.exam_required}
-                  onChange={(e) => updateField('exam_required', e.target.checked)}
-                  className="w-5 h-5 text-[#3B50BA] rounded border-slate-300 focus:ring-[#3B50BA] cursor-pointer"
-                />
               </div>
 
+              {/* 1. Require Task-Specific Competency Assessment Toggle */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-2">
+                  Require Task-Specific Competency Assessment? <span className="text-rose-400">*</span>
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => updateField('exam_required', false)}
+                    className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
+                      !formData.exam_required
+                        ? 'bg-indigo-600/20 border-indigo-500/60 text-white shadow-xs'
+                        : 'bg-[#0d1428] border-[#1e2a4a] text-slate-400 hover:border-[#2b3a67]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-white">No</span>
+                      {!formData.exam_required && <Check className="w-4 h-4 text-indigo-400" />}
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      No prerequisite competency assessment required for this task.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => updateField('exam_required', true)}
+                    className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
+                      formData.exam_required
+                        ? 'bg-purple-600/20 border-purple-500/60 text-white shadow-xs'
+                        : 'bg-[#0d1428] border-[#1e2a4a] text-slate-400 hover:border-[#2b3a67]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-white">Yes</span>
+                      {formData.exam_required && <Check className="w-4 h-4 text-purple-400" />}
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Require candidates to complete and pass designated topic assessments.
+                    </p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Conditional Section D inputs when exam_required is True */}
               {formData.exam_required && (
-                <div className="space-y-4 pt-2">
+                <div className="space-y-4 pt-2 border-t border-[#1b2542]">
+                  {/* Topic selection */}
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Select Server Assessment Template <span className="text-rose-500">*</span>
-                    </label>
-                    <select
-                      value={formData.exam_id}
-                      onChange={(e) => updateField('exam_id', e.target.value)}
-                      className={`w-full px-3.5 py-2.5 rounded-xl border text-sm focus:outline-none bg-white transition-colors ${
-                        inlineErrors.exam_id
-                          ? 'border-rose-400 focus:border-rose-500 bg-rose-50/20'
-                          : 'border-slate-200 focus:border-[#3B50BA]'
-                      }`}
-                    >
-                      <option value="">Select Assessment Template</option>
-                      {metadata.exams.map((exam) => (
-                        <option key={exam.exam_id} value={exam.exam_id}>
-                          {exam.exam_name} ({exam.category_name} &bull; Passing Score: {exam.passing_score}%)
-                        </option>
-                      ))}
-                    </select>
-                    {inlineErrors.exam_id && (
-                      <p className="text-xs text-rose-600 mt-1 flex items-center gap-1">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs font-semibold text-slate-300">
+                        Required Assessment Topics <span className="text-rose-400">*</span>
+                      </label>
+                      <span className="text-[11px] text-purple-400 font-medium">
+                        {formData.required_topic_ids.length} topic(s) selected
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {availableTopics.map((topic) => {
+                        const isSelected = formData.required_topic_ids.includes(String(topic.topic_id));
+                        return (
+                          <button
+                            key={topic.topic_id}
+                            type="button"
+                            onClick={() => handleToggleTopic(topic.topic_id)}
+                            className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between cursor-pointer ${
+                              isSelected
+                                ? 'bg-purple-950/30 border-purple-500/60 text-white shadow-xs'
+                                : 'bg-[#0d1428] border-[#1e2a4a] text-slate-300 hover:border-[#2b3a67]'
+                            }`}
+                          >
+                            <div>
+                              <div className="flex items-start justify-between gap-2">
+                                <span className="text-xs font-bold text-white leading-tight">
+                                  {topic.topic_name}
+                                </span>
+                                <div className={`w-4 h-4 rounded shrink-0 flex items-center justify-center border transition-all ${
+                                  isSelected ? 'bg-purple-500 border-purple-400 text-black' : 'border-slate-600 bg-transparent'
+                                }`}>
+                                  {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                                </div>
+                              </div>
+
+                              {topic.description && (
+                                <p className="text-[11px] text-slate-400 mt-1 line-clamp-2 leading-relaxed">
+                                  {topic.description}
+                                </p>
+                              )}
+                            </div>
+
+                            <div className="mt-3 pt-2 border-t border-[#1e2a4a] flex items-center justify-between text-[10px] text-slate-400">
+                              <span>Passing Benchmark: {topic.passing_score || 70}%</span>
+                              <span>~{topic.estimated_minutes || 10} mins</span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {inlineErrors.required_topic_ids && (
+                      <p className="text-xs text-rose-400 mt-2 flex items-center gap-1">
                         <AlertCircle className="w-3.5 h-3.5" />
-                        {inlineErrors.exam_id}
+                        {inlineErrors.required_topic_ids}
                       </p>
                     )}
                   </div>
 
-                  {selectedExam && (
-                    <div className="p-4 rounded-xl bg-purple-50/50 border border-purple-200 space-y-3">
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <span className="text-[10px] font-bold text-purple-700 tracking-wider uppercase">
-                            SERVER QUESTION POOL &bull; {selectedExam.category_name}
-                          </span>
-                          <h4 className="text-sm font-bold text-slate-900 mt-0.5">
-                            {selectedExam.exam_name}
-                          </h4>
-                          <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                            {selectedExam.description}
-                          </p>
-                        </div>
-                        <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">
-                          {selectedExam.status}
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3 pt-2 border-t border-purple-100 text-xs">
-                        <div className="p-2.5 rounded-lg bg-white border border-purple-100">
-                          <span className="text-[10px] text-slate-400 block font-medium">Configured Question Count</span>
-                          <span className="font-bold text-slate-900 mt-0.5 block">
-                            {selectedExam.question_count} Questions
-                          </span>
-                        </div>
-                        <div className="p-2.5 rounded-lg bg-white border border-purple-100">
-                          <span className="text-[10px] text-slate-400 block font-medium">Scoring Policy Threshold</span>
-                          <span className="font-bold text-emerald-700 mt-0.5 block">
-                            {selectedExam.passing_score}% Passing Score
-                          </span>
-                        </div>
-                      </div>
-
-                      <p className="text-[11px] text-purple-900 font-medium">
-                        &bull; Assessment questions, correct keys, and passing thresholds are strictly server-controlled to maintain exam integrity.
-                      </p>
+                  {/* Passing Score Benchmark (Read-Only) */}
+                  <div className="p-3.5 rounded-xl bg-purple-950/20 border border-purple-500/30 flex items-center justify-between text-xs">
+                    <div>
+                      <span className="font-bold text-white block">System Passing Benchmark</span>
+                      <span className="text-slate-400 text-[11px]">
+                        Server-calculated threshold required for each selected topic.
+                      </span>
                     </div>
-                  )}
+                    <div className="px-3 py-1.5 rounded-lg bg-emerald-950/60 text-emerald-400 border border-emerald-500/40 font-mono font-bold text-sm">
+                      70%
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-purple-300 font-medium">
+                    &bull; Candidates must achieve a passing score (70%) on every selected assessment topic. Scores are calculated and validated strictly on the server.
+                  </p>
                 </div>
               )}
             </div>
@@ -1203,63 +1383,60 @@ export const CreateTaskPage = () => {
             {/* ========================================================= */}
             {/* SECTION E: PUBLICATION SETTINGS & ACTION BAR */}
             {/* ========================================================= */}
-            <div className="sticky bottom-4 z-10 bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="sticky bottom-4 z-20 bg-[#080d1a]/95 backdrop-blur-md rounded-2xl border border-[#1b2542] p-4 sm:p-5 shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
               <div className="flex items-center gap-2 self-start sm:self-auto">
-                <Button
-                  variant="secondary"
-                  size="sm"
+                <button
+                  type="button"
                   onClick={handleCancelClick}
                   disabled={isSubmitting}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white hover:bg-[#151f38] border border-[#1e2a4a] transition-all cursor-pointer disabled:opacity-50"
                 >
                   Cancel
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
+                </button>
+                <button
+                  type="button"
                   onClick={() => setIsPreviewOpen(true)}
                   disabled={isSubmitting}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white hover:bg-[#151f38] border border-[#1e2a4a] transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
                 >
-                  <Eye className="w-3.5 h-3.5 mr-1 text-slate-500" />
+                  <Eye className="w-3.5 h-3.5 text-indigo-400" />
                   Preview
-                </Button>
+                </button>
                 {isEditMode && (
-                  <Button
-                    variant="danger"
-                    size="sm"
+                  <button
+                    type="button"
                     onClick={() => setIsDeleteModalOpen(true)}
                     disabled={isSubmitting || isDeleting}
-                    className="border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 hover:border-rose-300"
+                    className="px-4 py-2 rounded-xl text-xs font-semibold text-rose-400 hover:text-rose-300 bg-rose-950/40 hover:bg-rose-900/60 border border-rose-500/40 transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
                   >
-                    <Trash2 className="w-3.5 h-3.5 mr-1 text-rose-600" />
+                    <Trash2 className="w-3.5 h-3.5 text-rose-400" />
                     Delete Task
-                  </Button>
+                  </button>
                 )}
               </div>
 
               <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
-                <Button
-                  variant="secondary"
-                  size="md"
+                <button
+                  type="button"
                   onClick={() => handleSubmit('DRAFT')}
-                  isLoading={isSubmitting && formData.status === 'DRAFT'}
                   disabled={isSubmitting}
-                  className="flex-1 sm:flex-initial"
+                  className="px-5 py-2.5 rounded-xl text-xs font-semibold text-slate-200 hover:text-white bg-[#151f38] hover:bg-[#1c294d] border border-[#2b3a67] transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 flex-1 sm:flex-initial"
                 >
-                  <Save className="w-4 h-4 mr-1.5 text-slate-600" />
-                  Save Draft
-                </Button>
+                  <Save className="w-4 h-4 text-slate-400" />
+                  {isSubmitting && formData.status === 'DRAFT' ? 'Saving...' : 'Save Draft'}
+                </button>
 
-                <Button
-                  variant="primary"
-                  size="md"
+                <button
+                  type="button"
                   onClick={() => handleSubmit('ACTIVE')}
-                  isLoading={isSubmitting && formData.status === 'ACTIVE'}
                   disabled={isSubmitting}
-                  className="flex-1 sm:flex-initial"
+                  className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:brightness-110 shadow-[0_0_20px_rgba(79,70,229,0.4)] transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 flex-1 sm:flex-initial"
                 >
-                  <Send className="w-4 h-4 mr-1.5" />
-                  {isEditMode ? 'Update & Publish' : 'Publish Task'}
-                </Button>
+                  <Send className="w-4 h-4" />
+                  {isSubmitting && formData.status === 'ACTIVE' 
+                    ? 'Publishing...' 
+                    : isEditMode ? 'Update & Publish' : 'Publish Task'}
+                </button>
               </div>
             </div>
           </form>
@@ -1269,192 +1446,227 @@ export const CreateTaskPage = () => {
       {/* ========================================================= */}
       {/* MODAL: PREVIEW TASK CARD */}
       {/* ========================================================= */}
-      <Modal
-        isOpen={isPreviewOpen}
-        onClose={() => setIsPreviewOpen(false)}
-        title="Agent Marketplace Preview"
-      >
-        <div className="space-y-4 text-slate-800">
-          <p className="text-xs text-slate-500">
-            This preview simulates how your task specifications will appear to agents browsing the active catalog.
-          </p>
+      {isPreviewOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-[#0b1020] rounded-2xl border border-[#1b2542] p-6 text-white shadow-2xl relative max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-[#1b2542]">
+              <h3 className="text-base font-bold font-sora text-white">Agent Marketplace Preview</h3>
+              <button
+                type="button"
+                onClick={() => setIsPreviewOpen(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-          <div className="p-5 rounded-2xl border border-slate-200 bg-white shadow-xs space-y-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                  {selectedCategory?.category_name || 'Category Pending'}
-                </span>
-                <h3 className="text-base font-bold text-slate-900">
-                  {formData.task_name || 'Untitled Task'}
-                </h3>
+            <div className="mt-4 space-y-4">
+              <p className="text-xs text-slate-400">
+                This preview simulates how your task specifications will appear to agents browsing the active catalog.
+              </p>
+
+              <div className="p-5 rounded-2xl border border-[#1e2a4a] bg-[#0d1428] space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block mb-1">
+                      {selectedCategory?.category_name || 'Category Pending'}
+                    </span>
+                    <h3 className="text-base font-bold font-sora text-white">
+                      {formData.task_name || 'Untitled Task'}
+                    </h3>
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-950/60 text-emerald-400 border border-emerald-500/40">
+                    Ready to Apply
+                  </span>
+                </div>
+
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  {formData.description || 'No detailed description specified yet.'}
+                </p>
+
+                {/* Compensation & Work arrangement badges */}
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="px-2.5 py-1 rounded-lg bg-emerald-950/60 text-emerald-400 font-semibold border border-emerald-500/40 flex items-center gap-1">
+                    <DollarSign className="w-3.5 h-3.5" />
+                    {formData.payment_type === 'Hourly' ? (
+                      formData.hourly_rate_min 
+                        ? `${formData.currency} ${formData.hourly_rate_min}${formData.hourly_rate_max ? ` - ${formData.hourly_rate_max}` : ''} / hr`
+                        : 'Compensation Pending'
+                    ) : (
+                      formData.fixed_budget
+                        ? `${formData.currency} ${formData.fixed_budget} (Fixed)`
+                        : 'Budget Pending'
+                    )}
+                  </span>
+
+                  <span className="px-2.5 py-1 rounded-lg bg-[#151f38] text-slate-300 font-medium border border-[#23315c] flex items-center gap-1">
+                    <Globe className="w-3.5 h-3.5 text-slate-400" />
+                    {formData.work_arrangement} {formData.location ? `(${formData.location})` : ''}
+                  </span>
+
+                  <span className="px-2.5 py-1 rounded-lg bg-[#151f38] text-slate-300 font-medium border border-[#23315c] flex items-center gap-1">
+                    <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                    Deadline: {formData.application_deadline || 'Open'}
+                  </span>
+                </div>
+
+                {/* Required Prerequisites */}
+                <div className="p-3.5 rounded-xl bg-[#090e1c] border border-[#1b2542] space-y-2 text-xs">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                    Required Agent Qualifications
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                    <div>
+                      <span className="text-slate-500 block">Verified Experience</span>
+                      <span className="font-bold text-slate-200">
+                        {formData.minimum_experience_months ? `${formData.minimum_experience_months} months` : 'Open'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Mandatory Certifications</span>
+                      <span className="font-bold text-slate-200">
+                        {selectedCerts.length > 0 ? selectedCerts.map(c => c.certification_name).join(', ') : 'None Required'}
+                      </span>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <span className="text-slate-500 block">Required Assessment Topics</span>
+                      <span className="font-bold text-slate-200">
+                        {formData.exam_required 
+                          ? (selectedTopics.length > 0 ? `${selectedTopics.map(t => t.topic_name).join(', ')} (Benchmark: 70%)` : 'Assessment Required')
+                          : 'No Assessment Required'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                Ready to Apply
-              </span>
-            </div>
 
-            <p className="text-xs text-slate-600 leading-relaxed">
-              {formData.description || 'No detailed description specified yet.'}
-            </p>
-
-            {/* Compensation & Work arrangement badges */}
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 font-semibold border border-emerald-100 flex items-center gap-1">
-                <DollarSign className="w-3.5 h-3.5" />
-                {formData.payment_type === 'Hourly' ? (
-                  formData.hourly_rate_min 
-                    ? `${formData.currency} ${formData.hourly_rate_min}${formData.hourly_rate_max ? ` - ${formData.hourly_rate_max}` : ''} / hr`
-                    : 'Compensation Pending'
-                ) : (
-                  formData.fixed_budget
-                    ? `${formData.currency} ${formData.fixed_budget} (Fixed)`
-                    : 'Budget Pending'
-                )}
-              </span>
-
-              <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 font-medium flex items-center gap-1">
-                <Globe className="w-3.5 h-3.5 text-slate-500" />
-                {formData.work_arrangement} {formData.location ? `(${formData.location})` : ''}
-              </span>
-
-              <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 font-medium flex items-center gap-1">
-                <Calendar className="w-3.5 h-3.5 text-slate-500" />
-                Deadline: {formData.application_deadline || 'Open'}
-              </span>
-            </div>
-
-            {/* Required Prerequisites */}
-            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-150 space-y-2 text-xs">
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                Required Agent Qualifications
-              </span>
-              <div className="grid grid-cols-2 gap-2 text-[11px]">
-                <div>
-                  <span className="text-slate-400 block">Minimum Competency</span>
-                  <span className="font-bold text-slate-800">
-                    {formData.minimum_competency}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block">Mandatory Certification</span>
-                  <span className="font-bold text-slate-800">
-                    {selectedCert ? selectedCert.certification_name : 'None Required'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block">Experience</span>
-                  <span className="font-bold text-slate-800">
-                    {formData.minimum_experience_months ? `${formData.minimum_experience_months} months` : 'Open'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block">Assessment Exam</span>
-                  <span className="font-bold text-slate-800">
-                    {formData.exam_required ? (selectedExam?.exam_name || 'Exam Required') : 'No Exam Required'}
-                  </span>
-                </div>
+              <div className="pt-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setIsPreviewOpen(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-[#151f38] hover:bg-[#1c294d] text-white border border-[#2b3a67] transition-all cursor-pointer"
+                >
+                  Close Preview
+                </button>
               </div>
             </div>
-          </div>
-
-          <div className="pt-2 flex justify-end">
-            <Button size="sm" onClick={() => setIsPreviewOpen(false)}>
-              Close Preview
-            </Button>
           </div>
         </div>
-      </Modal>
+      )}
 
       {/* ========================================================= */}
       {/* MODAL: UNSAVED CHANGES WARNING */}
       {/* ========================================================= */}
-      <Modal
-        isOpen={isCancelModalOpen}
-        onClose={() => setIsCancelModalOpen(false)}
-        title="Discard Unsaved Changes?"
-      >
-        <div className="space-y-4 text-xs sm:text-sm text-slate-700">
-          <p>
-            You have unsaved changes in this task specification form. If you leave now, any unsubmitted information will be lost.
-          </p>
-          <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">
-            <Button variant="secondary" size="sm" onClick={() => setIsCancelModalOpen(false)}>
-              Continue Editing
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => {
-                setIsCancelModalOpen(false);
-                navigate('/admin/dashboard');
-              }}
-              className="bg-rose-600 hover:bg-rose-700 text-white"
-            >
-              Discard &amp; Exit
-            </Button>
+      {isCancelModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-[#0b1020] rounded-2xl border border-[#1b2542] p-6 text-white shadow-2xl relative">
+            <div className="flex items-center justify-between pb-3 border-b border-[#1b2542]">
+              <h3 className="text-base font-bold font-sora text-white">Discard Unsaved Changes?</h3>
+              <button
+                type="button"
+                onClick={() => setIsCancelModalOpen(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-4 text-xs sm:text-sm text-slate-300">
+              <p>
+                You have unsaved changes in this task specification form. If you leave now, any unsubmitted information will be lost.
+              </p>
+              <div className="pt-3 flex items-center justify-end gap-2 border-t border-[#1b2542]">
+                <button
+                  type="button"
+                  onClick={() => setIsCancelModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-[#151f38] cursor-pointer"
+                >
+                  Continue Editing
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCancelModalOpen(false);
+                    navigate('/workforce/dashboard');
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white shadow-md cursor-pointer"
+                >
+                  Discard &amp; Exit
+                </button>
+              </div>
+            </div>
           </div>
         </div>
-      </Modal>
+      )}
 
       {/* ========================================================= */}
       {/* MODAL: DELETE TASK CONFIRMATION */}
       {/* ========================================================= */}
-      <Modal
-        isOpen={isDeleteModalOpen}
-        onClose={() => {
-          if (!isDeleting) setIsDeleteModalOpen(false);
-        }}
-        title="Delete Task"
-      >
-        <div className="space-y-4 text-xs sm:text-sm text-slate-700">
-          <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0 border border-rose-100">
-              <AlertCircle className="w-5 h-5" />
+      {isDeleteModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-[#0b1020] rounded-2xl border border-[#1b2542] p-6 text-white shadow-2xl relative">
+            <div className="flex items-center justify-between pb-3 border-b border-[#1b2542]">
+              <h3 className="text-base font-bold font-sora text-white">Delete Task</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!isDeleting) setIsDeleteModalOpen(false);
+                }}
+                className="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
-            <div>
-              <p className="font-semibold text-slate-900">
-                Are you sure you want to permanently delete this task?
-              </p>
-              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                This action is permanent and cannot be undone. The task and all associated requirements, topics, and applications will be permanently removed.
-              </p>
-            </div>
-          </div>
 
-          <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setIsDeleteModalOpen(false)}
-              disabled={isDeleting}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={async () => {
-                if (!taskId) return;
-                setIsDeleting(true);
-                try {
-                  await adminService.deleteTask(taskId);
-                  navigate('/admin/dashboard');
-                } catch (err) {
-                  setFormError(err?.response?.data?.error || err.message || 'Failed to delete task.');
-                  setIsDeleteModalOpen(false);
-                } finally {
-                  setIsDeleting(false);
-                }
-              }}
-              isLoading={isDeleting}
-              className="bg-rose-600 hover:bg-rose-700 text-white font-medium"
-            >
-              Delete Permanently
-            </Button>
+            <div className="mt-4 space-y-4 text-xs sm:text-sm text-slate-300">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-950/60 text-rose-400 border border-rose-500/40 flex items-center justify-center shrink-0">
+                  <AlertCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="font-semibold text-white">
+                    Are you sure you want to permanently delete this task?
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                    This action is permanent and cannot be undone. The task and all associated requirements, topics, and applications will be permanently removed.
+                  </p>
+                </div>
+              </div>
+
+              <div className="pt-3 flex items-center justify-end gap-2 border-t border-[#1b2542]">
+                <button
+                  type="button"
+                  onClick={() => setIsDeleteModalOpen(false)}
+                  disabled={isDeleting}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-[#151f38] cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={async () => {
+                    if (!taskId) return;
+                    setIsDeleting(true);
+                    try {
+                      await adminService.deleteTask(taskId);
+                      navigate('/workforce/dashboard');
+                    } catch (err) {
+                      setFormError(err?.response?.data?.error || err.message || 'Failed to delete task.');
+                      setIsDeleteModalOpen(false);
+                    } finally {
+                      setIsDeleting(false);
+                    }
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white shadow-md disabled:opacity-50 cursor-pointer"
+                >
+                  {isDeleting ? 'Deleting...' : 'Delete Permanently'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
-      </Modal>
+      )}
     </div>
   );
 };

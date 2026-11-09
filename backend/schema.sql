@@ -52,11 +52,18 @@ CREATE TABLE IF NOT EXISTS `agent_experience` (
   `company` varchar(150) COLLATE utf8mb4_unicode_ci NOT NULL,
   `work_category` enum('Sales','Customer Service','Other') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'Other',
   `description` text COLLATE utf8mb4_unicode_ci,
+  `supervisor_name` varchar(150) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `supervisor_email` varchar(150) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `supervisor_phone` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `start_date` date NOT NULL,
   `end_date` date DEFAULT NULL,
   `is_current` tinyint(1) NOT NULL DEFAULT '0',
   `verification_status` enum('PENDING','VERIFIED','REJECTED') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'PENDING',
   `rejection_reason` text COLLATE utf8mb4_unicode_ci,
+  `verification_token` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `token_expires_at` datetime DEFAULT NULL,
+  `verified_via` enum('ADMIN','SUPERVISOR_REFERENCE','SYSTEM') COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `supervisor_feedback` text COLLATE utf8mb4_unicode_ci,
   `reviewed_by` int unsigned DEFAULT NULL,
   `reviewed_at` datetime DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
@@ -64,6 +71,7 @@ CREATE TABLE IF NOT EXISTS `agent_experience` (
   PRIMARY KEY (`experience_id`),
   KEY `idx_agent_exp` (`agent_id`),
   KEY `idx_agent_exp_status` (`agent_id`,`verification_status`),
+  KEY `idx_exp_verification_token` (`verification_token`),
   KEY `fk_agent_experience_reviewer` (`reviewed_by`),
   CONSTRAINT `fk_agent_experience_agent` FOREIGN KEY (`agent_id`) REFERENCES `agents` (`agent_id`) ON DELETE CASCADE,
   CONSTRAINT `fk_agent_experience_reviewer` FOREIGN KEY (`reviewed_by`) REFERENCES `users` (`user_id`) ON DELETE SET NULL
@@ -382,6 +390,51 @@ CREATE TABLE IF NOT EXISTS `task_recommendations` (
   CONSTRAINT `chk_recommendation_score` CHECK (((`recommendation_score` is null) or ((`recommendation_score` >= 0) and (`recommendation_score` <= 1))))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Table: task_certifications
+CREATE TABLE IF NOT EXISTS `task_certifications` (
+  `task_id` int unsigned NOT NULL,
+  `certification_id` int unsigned NOT NULL,
+  `is_mandatory` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`task_id`, `certification_id`),
+  KEY `idx_tc_task` (`task_id`),
+  KEY `idx_tc_certification` (`certification_id`),
+  CONSTRAINT `fk_tc_task` FOREIGN KEY (`task_id`) REFERENCES `tasks` (`task_id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_tc_certification` FOREIGN KEY (`certification_id`) REFERENCES `certifications` (`certification_id`) ON DELETE RESTRICT ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Table: task_assessment_topics
+CREATE TABLE IF NOT EXISTS `task_assessment_topics` (
+  `task_id` int unsigned NOT NULL,
+  `topic_id` int unsigned NOT NULL,
+  `is_mandatory` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`task_id`, `topic_id`),
+  KEY `idx_tat_task` (`task_id`),
+  KEY `idx_tat_topic` (`topic_id`),
+  CONSTRAINT `fk_tat_task` FOREIGN KEY (`task_id`) REFERENCES `tasks` (`task_id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_tat_topic` FOREIGN KEY (`topic_id`) REFERENCES `assessment_topics` (`topic_id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Table: agent_topic_results
+CREATE TABLE IF NOT EXISTS `agent_topic_results` (
+  `result_id` int unsigned NOT NULL AUTO_INCREMENT,
+  `agent_id` int unsigned NOT NULL,
+  `topic_id` int unsigned NOT NULL,
+  `attempt_id` int unsigned DEFAULT NULL,
+  `score` decimal(5,2) NOT NULL,
+  `passed` tinyint(1) NOT NULL,
+  `answers_json` json DEFAULT NULL,
+  `completed_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`result_id`),
+  KEY `idx_atr_agent_topic_passed` (`agent_id`, `topic_id`, `passed`),
+  KEY `idx_atr_agent_completed` (`agent_id`, `completed_at`),
+  KEY `idx_atr_attempt` (`attempt_id`),
+  CONSTRAINT `fk_atr_agent` FOREIGN KEY (`agent_id`) REFERENCES `agents` (`agent_id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_atr_topic` FOREIGN KEY (`topic_id`) REFERENCES `assessment_topics` (`topic_id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_atr_attempt` FOREIGN KEY (`attempt_id`) REFERENCES `assessment_attempts` (`attempt_id`) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Table: task_requirements
 CREATE TABLE IF NOT EXISTS `task_requirements` (
   `requirement_id` int unsigned NOT NULL AUTO_INCREMENT,
@@ -438,7 +491,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `full_name` varchar(150) COLLATE utf8mb4_unicode_ci NOT NULL,
   `email` varchar(150) COLLATE utf8mb4_unicode_ci NOT NULL,
   `password_hash` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
-  `role` enum('AGENT','ADMIN') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'AGENT',
+  `role` enum('AGENT','ADMIN','WORKFORCE_OFFICER','PLATFORM_ADMIN') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'AGENT',
   `is_active` tinyint(1) NOT NULL DEFAULT '1',
   `email_verified` tinyint(1) NOT NULL DEFAULT '0',
   `last_login_at` datetime DEFAULT NULL,
@@ -452,4 +505,24 @@ CREATE TABLE IF NOT EXISTS `users` (
 ) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- View: v_eligibility_summary
-CREATE OR REPLACE VIEW `v_eligibility_summary` AS select `ee`.`evaluation_id`;
+CREATE OR REPLACE VIEW `v_eligibility_summary` AS 
+SELECT 
+  ee.evaluation_id,
+  ee.agent_id,
+  u.full_name AS agent_name,
+  u.email AS agent_email,
+  ee.task_id,
+  t.task_name,
+  ee.prediction_id,
+  mp.predicted_competency,
+  mp.confidence AS prediction_confidence,
+  ee.eligibility_status,
+  ee.review_status,
+  ee.explanation,
+  ee.evaluated_at,
+  ee.reviewed_at
+FROM eligibility_evaluations ee
+JOIN agents a ON ee.agent_id = a.agent_id
+JOIN users u ON a.user_id = u.user_id
+JOIN tasks t ON ee.task_id = t.task_id
+LEFT JOIN ml_predictions mp ON ee.prediction_id = mp.prediction_id;

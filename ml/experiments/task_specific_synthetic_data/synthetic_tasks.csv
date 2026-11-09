@@ -1,0 +1,31 @@
+task_id,task_title,task_category,difficulty_level,difficulty_tier,min_relevant_experience_months,required_certification,min_assessment_score,min_communication_score,min_product_knowledge_score,min_sales_skill_score,min_customer_service_score
+TSK-001,B2B SaaS Mid-Market Pipeline Prospecting,Enterprise Sales,Medium,2,12,Sales_Specialist,65.0,70.0,60.0,70.0,50.0
+TSK-002,Strategic Enterprise Key Account Closing,Enterprise Sales,High,3,30,Sales_Specialist,75.0,80.0,70.0,80.0,55.0
+TSK-003,Inbound Sales Lead Qualification,Enterprise Sales,Low,1,6,None,55.0,65.0,50.0,60.0,45.0
+TSK-004,Public Sector RFP Proposal Pitching,Enterprise Sales,High,3,24,Sales_Specialist,75.0,78.0,72.0,78.0,50.0
+TSK-005,Channel Partner Reseller Enablement,Enterprise Sales,Medium,2,18,Sales_Specialist,68.0,72.0,65.0,68.0,50.0
+TSK-006,High-Velocity Inside Sales Campaigns,Enterprise Sales,Low,1,3,None,50.0,60.0,45.0,60.0,45.0
+TSK-007,Tier-1 Multi-Channel Helpdesk Support,Customer Support Escalations,Low,1,3,None,50.0,65.0,45.0,40.0,65.0
+TSK-008,Enterprise SLA Incident Escalation Lead,Customer Support Escalations,High,3,24,Customer_Success_Pro,75.0,78.0,68.0,45.0,80.0
+TSK-009,Billing Dispute & Executive Complaint Resolution,Customer Support Escalations,Medium,2,15,Customer_Success_Pro,65.0,72.0,55.0,45.0,72.0
+TSK-010,24/7 Global NOC Service Desk Agent,Customer Support Escalations,Medium,2,12,None,60.0,68.0,60.0,40.0,68.0
+TSK-011,High-Touch VIP Client Concierge,Customer Support Escalations,High,3,20,Customer_Success_Pro,70.0,82.0,65.0,50.0,80.0
+TSK-012,Social Media Reputation & Ticket Triage,Customer Support Escalations,Low,1,6,None,55.0,68.0,48.0,40.0,65.0
+TSK-013,Developer API & Webhook Integration Guidance,Technical Product Onboarding,High,3,30,Technical_Support_Architect,78.0,70.0,82.0,40.0,50.0
+TSK-014,Self-Serve Platform Setup & Walkthrough,Technical Product Onboarding,Low,1,6,None,55.0,65.0,60.0,40.0,50.0
+TSK-015,Data Migration & Custom ETL Validation,Technical Product Onboarding,High,3,24,Technical_Support_Architect,75.0,68.0,80.0,35.0,50.0
+TSK-016,SSO & Identity Provider Configuration Assistance,Technical Product Onboarding,Medium,2,15,Technical_Support_Architect,68.0,68.0,72.0,35.0,50.0
+TSK-017,Mobile SDK Debugging & Sandbox Deployment,Technical Product Onboarding,Medium,2,12,None,65.0,65.0,68.0,30.0,50.0
+TSK-018,Technical Architecture Scope & Kickoff,Technical Product Onboarding,High,3,36,Technical_Support_Architect,80.0,75.0,85.0,45.0,50.0
+TSK-019,Call Recording QA & Scorecard Auditing,Quality Assurance & Compliance,Low,1,6,None,60.0,65.0,55.0,40.0,60.0
+TSK-020,GDPR & HIPAA Compliance Verification Audit,Quality Assurance & Compliance,High,3,30,None,78.0,70.0,75.0,40.0,60.0
+TSK-021,Financial Transaction AML & KYC Verification,Quality Assurance & Compliance,Medium,2,18,None,68.0,65.0,65.0,40.0,60.0
+TSK-022,Contract Fulfillment & SLA Audit Reporting,Quality Assurance & Compliance,Medium,2,20,None,70.0,68.0,68.0,45.0,55.0
+TSK-023,Agent Scripting & Standard Operating Procedure Review,Quality Assurance & Compliance,Low,1,10,None,60.0,65.0,55.0,40.0,60.0
+TSK-024,Regulatory Anti-Fraud Investigation Sprint,Quality Assurance & Compliance,High,3,24,None,78.0,68.0,78.0,40.0,62.0
+TSK-025,At-Risk Client Churn Intervention & Save,Account Retention & Growth,High,3,24,Customer_Success_Pro,72.0,80.0,65.0,70.0,75.0
+TSK-026,Quarterly Business Review (QBR) Facilitation,Account Retention & Growth,Medium,2,15,None,65.0,75.0,62.0,60.0,68.0
+TSK-027,Subscription Tier Contract Renewal Processing,Account Retention & Growth,Low,1,6,None,55.0,65.0,52.0,58.0,60.0
+TSK-028,Enterprise Client Health Monitoring & NPS Advisory,Account Retention & Growth,Medium,2,18,Customer_Success_Pro,68.0,78.0,65.0,65.0,72.0
+TSK-029,Cross-Sell Expansion Campaign for Existing Accounts,Account Retention & Growth,Medium,2,15,Sales_Specialist,65.0,72.0,62.0,70.0,65.0
+TSK-030,Strategic Executive Partnership Advisory,Account Retention & Growth,High,3,36,Customer_Success_Pro,78.0,82.0,72.0,75.0,78.0
