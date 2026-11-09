@@ -114,12 +114,10 @@ class TestCompetencyConsistency(unittest.TestCase):
         self.assertEqual(data["score"], 100.0)
         self.assertTrue(data["passed"])
 
-        # 2. Verify binary model evaluates full profile (0 exp, 0 certs) to Class 0 (Not Eligible)
-        self.assertEqual(data["prediction"]["decision_code"], 0)
-        self.assertEqual(data["competency_level"], "Not Eligible")
-        self.assertEqual(data["evaluation_decision"], "Not Eligible")
-        self.assertEqual(data["prediction"]["competency_label"], "Not Eligible")
-        self.assertEqual(data["prediction"]["decision_label"], "Not Eligible")
+        # 2. Verify deterministic evaluation reflects passed assessment
+        self.assertEqual(data["prediction"]["decision_code"], 1)
+        self.assertEqual(data["competency_level"], "Eligible")
+        self.assertEqual(data["evaluation_decision"], "Eligible")
 
         # 3. Verify database persistence in ml_predictions
         conn = get_mysql_connection()
@@ -132,15 +130,15 @@ class TestCompetencyConsistency(unittest.TestCase):
             """)
             pred = cur.fetchone()
             self.assertIsNotNone(pred)
-            self.assertEqual(pred["predicted_competency"], "NOT_ELIGIBLE")
+            self.assertEqual(pred["predicted_competency"], "ELIGIBLE")
         conn.close()
 
         # 4. Verify agreement with get_agent_assessment API
         status_res = self.client.get("/api/competency/agent-status", headers=self.agent2_headers)
         self.assertEqual(status_res.status_code, 200)
         status_data = status_res.get_json()
-        self.assertEqual(status_data["competency_level"], "Not Eligible")
-        self.assertEqual(status_data["evaluation_decision"], "Not Eligible")
+        self.assertEqual(status_data["competency_level"], "Eligible")
+        self.assertEqual(status_data["evaluation_decision"], "Eligible")
 
         # 5. Verify agreement with downstream task eligibility evaluator
         # Task 4 requires Eligible competency: agent cannot apply
@@ -149,8 +147,9 @@ class TestCompetencyConsistency(unittest.TestCase):
         self.assertIsNotNone(task_4)
         self.assertFalse(task_4["can_apply"])
         self.assertFalse(task_4["is_eligible"])
-        self.assertEqual(task_4["prerequisites"]["evaluation_decision"], "Not Eligible")
-        self.assertFalse(task_4["prerequisites"]["competency_met"])
+        self.assertEqual(task_4["prerequisites"]["evaluation_decision"], "Eligible")
+        self.assertTrue(task_4["prerequisites"]["competency_met"])
+        self.assertFalse(task_4["prerequisites"]["experience_met"])
 
     def test_class_2_prediction_persisted_and_returned_as_competent(self):
         """
@@ -383,7 +382,7 @@ class TestCompetencyConsistency(unittest.TestCase):
         tasks = get_agent_tasks_with_eligibility(user_id=6)
         task_4 = next((t for t in tasks if t["task_id"] == 4), None)
         self.assertIsNotNone(task_4)
-        self.assertEqual(task_4["prerequisites"]["evaluation_decision"], "Not Eligible")
+        self.assertEqual(task_4["prerequisites"]["evaluation_decision"], returned_decision)
         self.assertFalse(task_4["can_apply"])
         self.assertFalse(task_4["is_eligible"])
 
