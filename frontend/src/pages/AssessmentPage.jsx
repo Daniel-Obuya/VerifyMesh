@@ -46,6 +46,13 @@ export const AssessmentPage = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState(null);
 
+  // Candidate display formatting
+  const rawName = user?.fullName || user?.username || 'Candidate';
+  const cleanName = rawName.replace(/\s*\(Verified\)/gi, '').trim();
+  const userInitials = cleanName
+    ? cleanName.split(' ').filter(Boolean).map(n => n[0]).join('').substring(0, 2).toUpperCase()
+    : 'CA';
+
   // 1. Fetch Task Details and Required Topics
   useEffect(() => {
     let isMounted = true;
@@ -236,7 +243,6 @@ export const AssessmentPage = () => {
 
       if (submitRes?.success && submitRes.data) {
         const resultingAttemptId = submitRes.data.attempt_id || attemptId;
-        // Navigate to dedicated assessment results page
         navigate(`/agent/assessment/results/${resultingAttemptId}`);
       } else {
         throw new Error(submitRes?.error || 'Server-side grading failed.');
@@ -253,20 +259,30 @@ export const AssessmentPage = () => {
 
   if (isLoadingTask) {
     return (
-      <div className="min-h-screen bg-[#F8FAFC] flex items-center justify-center font-sans">
-        <div className="text-center space-y-3">
-          <div className="w-10 h-10 border-3 border-[#3B50BA] border-t-transparent rounded-full animate-spin mx-auto" />
-          <p className="text-sm font-semibold text-slate-600">Loading qualification requirements...</p>
+      <div className="min-h-screen bg-[#070b14] text-[#e8ebf7] flex items-center justify-center font-sans relative selection:bg-[#5a69f0]/40 selection:text-white">
+        <div className="fixed inset-0 pointer-events-none z-0">
+          <div className="absolute top-0 left-1/4 w-[600px] h-[400px] bg-indigo-600/6 blur-[140px] rounded-full" />
+          <div className="absolute top-1/3 right-10 w-[500px] h-[350px] bg-blue-500/5 blur-[130px] rounded-full" />
+        </div>
+        <div className="text-center space-y-3 relative z-10">
+          <div className="w-10 h-10 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto" />
+          <p className="text-sm font-semibold text-slate-400">Loading qualification requirements...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] text-slate-800 font-sans flex flex-col">
-      {/* Top Professional Header */}
-      <header className="bg-white border-b border-slate-200/80 px-6 sm:px-8 h-16 flex items-center justify-between sticky top-0 z-30">
-        <div className="flex items-center gap-4">
+    <div className="min-h-screen bg-[#070b14] text-[#e8ebf7] flex flex-col font-sans relative selection:bg-[#5a69f0]/40 selection:text-white">
+      {/* Ambient background glows matching VerifyMesh Dashboard Design */}
+      <div className="fixed inset-0 pointer-events-none z-0">
+        <div className="absolute top-0 left-1/4 w-[600px] h-[400px] bg-indigo-600/6 blur-[140px] rounded-full" />
+        <div className="absolute top-1/3 right-10 w-[500px] h-[350px] bg-blue-500/5 blur-[130px] rounded-full" />
+      </div>
+
+      {/* Top Professional Header Bar */}
+      <header className="h-16 bg-[#080d1a]/95 border-b border-[#1b2542] px-4 sm:px-8 flex items-center justify-between shrink-0 sticky top-0 z-30 backdrop-blur-md">
+        <div className="flex items-center gap-3 sm:gap-4">
           <button
             type="button"
             onClick={() => {
@@ -278,44 +294,58 @@ export const AssessmentPage = () => {
                 navigate('/dashboard');
               }
             }}
-            className="p-2 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors flex items-center gap-1.5 text-xs font-semibold cursor-pointer"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-300 hover:text-white bg-[#151f38]/60 hover:bg-[#151f38] border border-[#1e2a4a] transition-all cursor-pointer"
           >
-            <ArrowLeft className="w-4 h-4" />
+            <ArrowLeft className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Back to Dashboard</span>
+            <span className="sm:hidden">Back</span>
           </button>
 
-          <div className="h-5 w-px bg-slate-200 hidden sm:block" />
+          <div className="h-5 w-px bg-[#1b2542] hidden sm:block" />
 
-          <div className="flex items-center gap-2 select-none">
-            <div className="w-7 h-7 rounded-lg bg-[#3B50BA] flex items-center justify-center p-1 shadow-xs shrink-0">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="w-full h-full text-white">
-                <path d="M3 16l6-6 4 4 8-8" />
-                <path d="M14 6h7v7" />
+          <div className="flex items-center gap-2.5 text-white select-none">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#4b5bd8] to-[#6f7dff] flex items-center justify-center p-1.5 shadow-lg shadow-indigo-500/25 shrink-0">
+              <svg viewBox="0 0 28 28" fill="none" className="w-full h-full text-white">
+                <path d="M6 8V18C6 20.2091 7.79086 22 10 22H20" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+                <path d="M10 17L15 13L21 16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                <circle cx="10" cy="17" r="2.2" fill="currentColor" />
+                <circle cx="15" cy="13" r="2.2" fill="currentColor" />
+                <circle cx="21" cy="16" r="2.2" fill="currentColor" />
               </svg>
             </div>
-            <span className="text-base font-bold text-slate-900 tracking-tight">VerifyMesh Assessment</span>
+            <div>
+              <span className="font-sora text-sm sm:text-base font-bold text-white tracking-tight block">
+                VerifyMesh
+              </span>
+              <span className="text-[10px] font-semibold tracking-wider text-indigo-400 uppercase block -mt-1">
+                Assessment Battery
+              </span>
+            </div>
           </div>
         </div>
 
         {/* Candidate & Assessment Status Pill */}
         <div className="flex items-center gap-3">
-          <div className="text-right hidden md:block">
-            <span className="text-xs font-bold text-slate-900 block">{user?.fullName || user?.username || 'Agent'}</span>
-            <span className="text-[11px] text-slate-400">Authenticated Candidate</span>
+          <div className="text-right hidden sm:block">
+            <span className="text-xs font-bold text-white block">{cleanName}</span>
+            <span className="text-[11px] text-slate-400 flex items-center justify-end gap-1">
+              <ShieldCheck className="w-3 h-3 text-emerald-400" />
+              Authenticated Candidate
+            </span>
           </div>
-          <div className="w-8 h-8 rounded-full bg-[#E0E7FF] text-[#3B50BA] font-bold text-xs flex items-center justify-center">
-            {user?.fullName ? user.fullName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() : 'AG'}
+          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 text-white font-bold text-xs flex items-center justify-center shadow-xs">
+            {userInitials}
           </div>
         </div>
       </header>
 
-      {/* Main Body */}
-      <main className="flex-1 max-w-4xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
+      {/* Main Container */}
+      <main className="flex-1 py-8 px-4 sm:px-6 lg:px-8 max-w-4xl w-full mx-auto space-y-6 relative z-10">
         {/* Error Alert */}
         {errorMessage && (
-          <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 flex items-start gap-3 text-xs sm:text-sm text-rose-800 animate-in fade-in duration-200">
-            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-            <span className="flex-1">{errorMessage}</span>
+          <div className="p-4 rounded-2xl bg-rose-950/60 border border-rose-500/40 text-rose-300 text-xs sm:text-sm flex items-start gap-3 shadow-lg animate-in fade-in duration-200">
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            <span className="flex-1 font-medium">{errorMessage}</span>
           </div>
         )}
 
@@ -326,31 +356,37 @@ export const AssessmentPage = () => {
           <div className="space-y-6 animate-in fade-in duration-200">
             {/* Task Context Card */}
             {task && (
-              <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+              <div className="bg-[#0b1020] rounded-2xl p-6 sm:p-7 border border-[#1b2542] shadow-xl space-y-5 relative overflow-hidden">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#1b2542] pb-4">
                   <div>
-                    <span className="text-xs font-bold text-[#3B50BA] tracking-wider uppercase">
+                    <span className="text-[11px] font-bold text-indigo-400 tracking-wider uppercase">
                       Qualifying For Task
                     </span>
-                    <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight mt-0.5">
-                      {task.title}
+                    <h1 className="text-xl sm:text-2xl font-bold font-sora text-white tracking-tight mt-1">
+                      {task.title || task.task_name}
                     </h1>
                     {task.category && (
-                      <span className="text-xs text-slate-500 font-medium">{task.category} &bull; {task.work_arrangement || 'Remote'}</span>
+                      <span className="text-xs text-slate-400 font-medium">
+                        {task.category} &bull; {task.work_arrangement || 'Remote'}
+                      </span>
                     )}
                   </div>
                   <div className="sm:text-right">
-                    <span className="text-xs font-semibold text-slate-500 block">Compensation</span>
-                    <span className="text-base font-bold text-slate-900">{task.payout || '$30 - $40 / hr'}</span>
+                    <span className="text-xs font-semibold text-slate-400 block">Compensation</span>
+                    <span className="text-base font-bold text-emerald-400 font-mono">
+                      {task.payout || '$30 - $40 / hr'}
+                    </span>
                   </div>
                 </div>
 
-                {/* Required Topics Progress Bar & Pills */}
+                {/* Required Topics Progress Bar & Cards */}
                 {task.required_topics && task.required_topics.length > 0 && (
-                  <div className="space-y-2.5">
+                  <div className="space-y-3">
                     <div className="flex items-center justify-between text-xs">
-                      <span className="font-bold text-slate-700">Required Qualification Topics</span>
-                      <span className="font-semibold text-slate-500">
+                      <span className="font-bold text-slate-300 uppercase tracking-wider">
+                        Required Qualification Topics
+                      </span>
+                      <span className="font-semibold text-slate-400">
                         {task.topics_passed_count || 0} of {task.topics_total || task.required_topics.length} Passed
                       </span>
                     </div>
@@ -368,27 +404,27 @@ export const AssessmentPage = () => {
                               const found = topics.find(t => t.topic_id === rt.topic_id);
                               if (found) setSelectedTopic(found);
                             }}
-                            className={`p-3.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                            className={`p-4 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
                               isCurrentSelected 
-                                ? 'bg-blue-50/70 border-[#3B50BA] shadow-xs' 
-                                : 'bg-white border-slate-200/80 hover:border-slate-300'
+                                ? 'bg-indigo-950/40 border-indigo-500/80 shadow-lg shadow-indigo-500/10' 
+                                : 'bg-[#080d1a]/80 border-[#1b2542] hover:border-[#2a3b66] hover:bg-[#0c1427]'
                             }`}
                           >
-                            <div className="space-y-0.5">
-                              <span className="text-xs font-bold text-slate-900 block">
+                            <div className="space-y-1">
+                              <span className="text-xs font-bold text-white block">
                                 {rt.name || rt.topic_name}
                               </span>
-                              <span className="text-[11px] text-slate-500">
+                              <span className="text-[11px] text-slate-400 block">
                                 5 Scenario Questions &bull; Pass Threshold: {rt.passing_threshold ?? rt.passing_score ?? 70}%
                               </span>
                             </div>
 
                             <span className={`px-2.5 py-1 rounded-full text-xs font-bold shrink-0 border ${
                               isPassed
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                ? 'bg-emerald-950/60 text-emerald-400 border-emerald-500/40'
                                 : isFailed
-                                ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                : 'bg-amber-50 text-amber-700 border-amber-200'
+                                ? 'bg-rose-950/60 text-rose-400 border-rose-500/40'
+                                : 'bg-amber-950/60 text-amber-300 border-amber-500/40'
                             }`}>
                               {isPassed 
                                 ? `✓ Passed (${rt.latest_score}%)` 
@@ -407,24 +443,24 @@ export const AssessmentPage = () => {
 
             {/* Assessment Details & Instructions Card */}
             {selectedTopic && (
-              <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-8 shadow-xs space-y-6">
+              <div className="bg-[#0b1020] rounded-2xl p-6 sm:p-7 border border-[#1b2542] shadow-xl space-y-6 relative overflow-hidden">
                 <div className="flex items-start gap-4">
-                  <div className="w-12 h-12 rounded-2xl bg-blue-50 text-[#3B50BA] flex items-center justify-center shrink-0 shadow-xs">
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-950/80 text-indigo-400 border border-indigo-500/30 flex items-center justify-center shrink-0 shadow-lg shadow-indigo-500/10">
                     <Sparkles className="w-6 h-6" />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-1 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold uppercase tracking-wider text-[#3B50BA]">
+                      <span className="text-xs font-bold uppercase tracking-wider text-indigo-400">
                         Competency Evaluation
                       </span>
-                      <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                      <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-[#131d35] text-indigo-300 border border-[#223055]">
                         Topic {selectedTopic.topic_id}
                       </span>
                     </div>
-                    <h2 className="text-2xl font-bold text-slate-900">
+                    <h2 className="text-xl sm:text-2xl font-bold font-sora text-white">
                       {selectedTopic.topic_name}
                     </h2>
-                    <p className="text-sm text-slate-600 leading-relaxed pt-1">
+                    <p className="text-xs sm:text-sm text-slate-300 leading-relaxed pt-1">
                       {selectedTopic.description || 'Demonstrate professional situational judgment and problem-solving techniques for this competency topic.'}
                     </p>
                   </div>
@@ -432,44 +468,44 @@ export const AssessmentPage = () => {
 
                 {/* Specification Badges */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
-                  <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl">
+                  <div className="p-3.5 bg-[#080d1a]/80 border border-[#1b2542] rounded-xl">
                     <span className="text-[11px] font-semibold text-slate-400 uppercase block">Questions</span>
-                    <span className="text-sm font-bold text-slate-900 mt-0.5 block">5 Scenarios</span>
+                    <span className="text-sm font-bold text-white mt-0.5 block">5 Scenarios</span>
                   </div>
-                  <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl">
+                  <div className="p-3.5 bg-[#080d1a]/80 border border-[#1b2542] rounded-xl">
                     <span className="text-[11px] font-semibold text-slate-400 uppercase block">Estimated Time</span>
-                    <span className="text-sm font-bold text-slate-900 mt-0.5 block">8 - 12 Minutes</span>
+                    <span className="text-sm font-bold text-white mt-0.5 block">8 - 12 Minutes</span>
                   </div>
-                  <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl">
+                  <div className="p-3.5 bg-[#080d1a]/80 border border-[#1b2542] rounded-xl">
                     <span className="text-[11px] font-semibold text-slate-400 uppercase block">Passing Score</span>
-                    <span className="text-sm font-bold text-slate-900 mt-0.5 block">
+                    <span className="text-sm font-bold text-indigo-300 mt-0.5 block">
                       &ge; {selectedTopic.passing_score ?? 70}%
                     </span>
                   </div>
-                  <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl">
+                  <div className="p-3.5 bg-[#080d1a]/80 border border-[#1b2542] rounded-xl">
                     <span className="text-[11px] font-semibold text-slate-400 uppercase block">Result Reuse</span>
-                    <span className="text-sm font-bold text-emerald-700 mt-0.5 block">Permanent / Valid</span>
+                    <span className="text-sm font-bold text-emerald-400 mt-0.5 block">Permanent / Valid</span>
                   </div>
                 </div>
 
                 {/* Important Rules Checklist */}
-                <div className="p-4 rounded-xl bg-blue-50/60 border border-blue-100 space-y-2 text-xs sm:text-sm text-slate-700">
-                  <h3 className="font-bold text-slate-900 flex items-center gap-2">
-                    <ShieldCheck className="w-4 h-4 text-[#3B50BA]" />
+                <div className="p-4 rounded-xl bg-indigo-950/30 border border-indigo-500/30 space-y-2 text-xs sm:text-sm text-slate-300">
+                  <h3 className="font-bold text-white flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-indigo-400" />
                     <span>Assessment Protocol &amp; Guidelines</span>
                   </h3>
-                  <ul className="space-y-1.5 list-disc list-inside text-slate-600 text-xs leading-relaxed">
-                    <li>One question presented at a time with full freedom to navigate forward and backward.</li>
+                  <ul className="space-y-1.5 list-disc list-inside text-slate-400 text-xs leading-relaxed">
+                    <li>One scenario question presented at a time with full freedom to navigate forward and backward.</li>
                     <li>Answers are safely preserved during navigation and verified on a final review screen.</li>
-                    <li>Submissions are graded authoritatively on the server; correct answers are never revealed in transit.</li>
+                    <li>Submissions are graded authoritatively on the server; correct answers are never exposed in transit.</li>
                     <li>Passing results are permanently credited to your agent record and satisfy requirements on any task needing this topic.</li>
                     <li>If the score falls below the passing threshold, a retake is permitted after reviewing the outcome.</li>
                   </ul>
                 </div>
 
                 {/* Action CTA */}
-                <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-slate-100">
-                  <span className="text-xs text-slate-500">
+                <div className="pt-4 flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-[#1b2542]">
+                  <span className="text-xs text-slate-400">
                     Ready to begin? Click below to launch the dedicated evaluation workspace.
                   </span>
 
@@ -477,7 +513,7 @@ export const AssessmentPage = () => {
                     type="button"
                     onClick={handleStartAssessment}
                     disabled={isStartingAttempt}
-                    className="w-full sm:w-auto px-6 py-3 rounded-xl bg-[#3B50BA] hover:bg-[#31429e] disabled:opacity-50 text-white font-bold text-sm shadow-xs hover:shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+                    className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-indigo-700 hover:from-blue-500 hover:to-indigo-600 disabled:opacity-50 text-white font-bold text-sm shadow-lg shadow-indigo-600/30 hover:shadow-indigo-600/50 transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-98"
                   >
                     {isStartingAttempt ? (
                       <>
@@ -501,13 +537,13 @@ export const AssessmentPage = () => {
              ========================================================================= */
           <div className="space-y-5 animate-in fade-in duration-200">
             {/* Workspace Header Bar */}
-            <div className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-xs space-y-3">
+            <div className="bg-[#0b1020] rounded-2xl border border-[#1b2542] p-4 sm:p-5 shadow-xl space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <span className="text-xs font-bold text-[#3B50BA] uppercase tracking-wider block">
+                  <span className="text-xs font-bold text-indigo-400 uppercase tracking-wider block">
                     {selectedTopic?.topic_name}
                   </span>
-                  <h2 className="text-lg font-bold text-slate-900 mt-0.5">
+                  <h2 className="text-base sm:text-lg font-bold font-sora text-white mt-0.5">
                     {isReviewMode ? 'Review Responses & Confirmation' : `Question ${currentQuestionIndex + 1} of ${totalQuestions}`}
                   </h2>
                 </div>
@@ -515,18 +551,18 @@ export const AssessmentPage = () => {
                 <div className="text-right">
                   <span className={`text-xs font-bold px-2.5 py-1 rounded-full border ${
                     allAnswered 
-                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
-                      : 'bg-blue-50 text-[#3B50BA] border-blue-200'
+                      ? 'bg-emerald-950/60 text-emerald-400 border-emerald-500/40' 
+                      : 'bg-indigo-950/60 text-indigo-300 border border-indigo-500/40'
                   }`}>
                     {answeredCount} of {totalQuestions} Answered {allAnswered && '✓'}
                   </span>
                 </div>
               </div>
 
-              {/* Progress Bar */}
-              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+              {/* Progress Bar Track */}
+              <div className="w-full bg-[#080d1a] h-2 rounded-full overflow-hidden border border-[#1b2542]">
                 <div
-                  className="bg-[#3B50BA] h-full rounded-full transition-all duration-300"
+                  className="bg-gradient-to-r from-blue-500 to-indigo-500 h-full rounded-full transition-all duration-300 shadow-xs shadow-indigo-500/50"
                   style={{ width: `${((currentQuestionIndex + 1) / totalQuestions) * 100}%` }}
                 />
               </div>
@@ -544,10 +580,10 @@ export const AssessmentPage = () => {
                       onClick={() => handleJumpToQuestion(idx)}
                       className={`flex-1 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all cursor-pointer ${
                         isCur
-                          ? 'bg-[#3B50BA] text-white shadow-xs'
+                          ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md shadow-indigo-500/30 border border-indigo-400/50'
                           : isAns
-                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
-                          : 'bg-slate-50 text-slate-500 border border-slate-200 hover:bg-slate-100'
+                          ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-500/40 hover:bg-emerald-900/60'
+                          : 'bg-[#080d1a] text-slate-400 border border-[#1b2542] hover:border-[#2a3b66] hover:text-white'
                       }`}
                       title={`Jump to Question ${idx + 1}`}
                     >
@@ -562,12 +598,12 @@ export const AssessmentPage = () => {
             {/* Assessment Workspace Body */}
             {isReviewMode ? (
               /* Confirmation / Review Screen */
-              <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-7 shadow-xs space-y-5 animate-in fade-in duration-200">
-                <div className="p-4 rounded-xl bg-blue-50/70 border border-blue-200 text-xs sm:text-sm text-blue-900 flex items-start gap-3">
-                  <FileCheck2 className="w-5 h-5 text-[#3B50BA] shrink-0 mt-0.5" />
+              <div className="bg-[#0b1020] rounded-2xl border border-[#1b2542] p-5 sm:p-7 shadow-xl space-y-5 animate-in fade-in duration-200">
+                <div className="p-4 rounded-xl bg-indigo-950/40 border border-indigo-500/30 text-xs sm:text-sm text-indigo-200 flex items-start gap-3">
+                  <FileCheck2 className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5" />
                   <div>
-                    <strong className="block font-semibold">Review your scenario responses before final grading:</strong>
-                    <span className="text-xs text-blue-800">
+                    <strong className="block font-semibold text-white">Review your scenario responses before final grading:</strong>
+                    <span className="text-xs text-slate-300">
                       All responses will be graded securely by the backend engine. Click 'Edit' next to any question to modify your selection.
                     </span>
                   </div>
@@ -596,38 +632,38 @@ export const AssessmentPage = () => {
                         key={q.question_id}
                         className={`p-4 rounded-xl border transition-all flex items-start justify-between gap-3 ${
                           isUnanswered
-                            ? 'bg-amber-50/60 border-amber-200'
-                            : 'bg-white border-slate-200 hover:border-slate-300'
+                            ? 'bg-amber-950/20 border-amber-500/40'
+                            : 'bg-[#080d1a]/80 border-[#1b2542] hover:border-[#2a3b66]'
                         }`}
                       >
                         <div className="space-y-1.5 flex-1">
                           <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-slate-900">Question {idx + 1}</span>
+                            <span className="text-xs font-bold text-white">Question {idx + 1}</span>
                             {isUnanswered ? (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-950/60 text-amber-300 border border-amber-500/40">
                                 Unanswered
                               </span>
                             ) : (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-950/60 text-emerald-400 border border-emerald-500/40">
                                 Answered
                               </span>
                             )}
                           </div>
-                          <p className="text-xs sm:text-sm text-slate-700 line-clamp-2 leading-relaxed">
+                          <p className="text-xs sm:text-sm text-slate-300 line-clamp-2 leading-relaxed">
                             {q.question_text}
                           </p>
                           <div className="flex items-center gap-2 pt-1 text-xs">
-                            <span className="font-bold text-[#3B50BA] bg-blue-50 px-2 py-0.5 rounded border border-blue-200 text-[11px]">
+                            <span className="font-bold text-indigo-300 bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-500/40 text-[11px]">
                               Option {chosenOptId || 'None'}
                             </span>
-                            <span className="text-slate-600 truncate max-w-md">{chosenText}</span>
+                            <span className="text-slate-400 truncate max-w-md">{chosenText}</span>
                           </div>
                         </div>
 
                         <button
                           type="button"
                           onClick={() => handleJumpToQuestion(idx)}
-                          className="px-3 py-1.5 text-xs font-bold text-[#3B50BA] hover:bg-blue-50 rounded-lg transition-colors cursor-pointer shrink-0"
+                          className="px-3 py-1.5 text-xs font-bold text-indigo-400 hover:text-white hover:bg-indigo-900/40 rounded-lg border border-transparent hover:border-indigo-500/30 transition-all cursor-pointer shrink-0"
                         >
                           Edit
                         </button>
@@ -637,11 +673,11 @@ export const AssessmentPage = () => {
                 </div>
 
                 {/* Review Footer Controls */}
-                <div className="pt-4 border-t border-slate-100 flex items-center justify-between gap-3">
+                <div className="pt-4 border-t border-[#1b2542] flex items-center justify-between gap-3">
                   <button
                     type="button"
                     onClick={() => setIsReviewMode(false)}
-                    className="px-4 py-2.5 text-xs sm:text-sm font-semibold text-slate-600 hover:text-slate-800 rounded-xl hover:bg-slate-100 transition-colors flex items-center gap-1.5 cursor-pointer"
+                    className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold text-slate-300 hover:text-white bg-[#151f38]/60 hover:bg-[#151f38] border border-[#1e2a4a] transition-all cursor-pointer"
                   >
                     <ArrowLeft className="w-4 h-4" />
                     <span>Back to Questions</span>
@@ -651,7 +687,7 @@ export const AssessmentPage = () => {
                     type="button"
                     onClick={handleSubmitAssessment}
                     disabled={isSubmitting || !allAnswered}
-                    className="px-6 py-2.5 rounded-xl bg-[#3B50BA] hover:bg-[#31429e] disabled:opacity-50 text-white font-bold text-xs sm:text-sm shadow-xs transition-colors flex items-center gap-2 cursor-pointer active:scale-98"
+                    className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-indigo-700 hover:from-blue-500 hover:to-indigo-600 disabled:opacity-50 text-white font-bold text-xs sm:text-sm shadow-lg shadow-indigo-600/30 hover:shadow-indigo-600/50 transition-all flex items-center gap-2 cursor-pointer active:scale-98"
                   >
                     {isSubmitting ? (
                       <>
@@ -670,20 +706,20 @@ export const AssessmentPage = () => {
             ) : (
               /* One Question at a Time View */
               currentQuestion && (
-                <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-7 shadow-xs space-y-5 animate-in fade-in duration-200">
+                <div className="bg-[#0b1020] rounded-2xl border border-[#1b2542] p-5 sm:p-7 shadow-xl space-y-5 animate-in fade-in duration-200">
                   {/* Scenario Question Prompt */}
-                  <div className="p-4 sm:p-5 rounded-xl bg-slate-50 border border-slate-200/90 space-y-1">
-                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                  <div className="p-4 sm:p-5 rounded-xl bg-[#080d1a]/90 border border-[#1b2542] space-y-1">
+                    <span className="text-[11px] font-bold text-indigo-400 uppercase tracking-wider block">
                       Workplace Scenario
                     </span>
-                    <p className="text-sm sm:text-base font-semibold text-slate-900 leading-relaxed">
+                    <p className="text-sm sm:text-base font-semibold text-white leading-relaxed">
                       {currentQuestion.question_text}
                     </p>
                   </div>
 
                   {/* Answer Options */}
                   <div className="space-y-3 pt-1">
-                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
                       Select Your Response:
                     </span>
                     {currentQuestion.options && currentQuestion.options.map((opt, oIdx) => {
@@ -697,18 +733,18 @@ export const AssessmentPage = () => {
                           onClick={() => handleSelectOption(currentQuestion.question_id, optId)}
                           className={`flex items-start gap-3.5 p-4 rounded-xl border text-xs sm:text-sm cursor-pointer transition-all ${
                             isSelected
-                              ? 'bg-blue-50/90 border-[#3B50BA] text-slate-900 font-medium shadow-xs'
-                              : 'bg-white border-slate-200/90 text-slate-700 hover:bg-slate-50 hover:border-slate-300'
+                              ? 'bg-indigo-950/40 border-indigo-500 text-white font-medium shadow-md shadow-indigo-500/10'
+                              : 'bg-[#080d1a]/80 border-[#1b2542] text-slate-300 hover:bg-[#0f172a] hover:border-[#2a3b66]'
                           }`}
                         >
                           <div className={`w-7 h-7 rounded-full border flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 transition-colors ${
                             isSelected
-                              ? 'bg-[#3B50BA] text-white border-[#3B50BA]'
-                              : 'bg-white text-slate-500 border-slate-300'
+                              ? 'bg-indigo-600 text-white border-indigo-400 shadow-xs'
+                              : 'bg-[#131d35] text-slate-400 border-[#223055]'
                           }`}>
                             {optId}
                           </div>
-                          <span className="leading-relaxed flex-1 pt-0.5">
+                          <span className="leading-relaxed flex-1 pt-0.5 text-slate-200">
                             {optText}
                           </span>
                         </label>
@@ -717,15 +753,15 @@ export const AssessmentPage = () => {
                   </div>
 
                   {/* Navigation Controls */}
-                  <div className="pt-4 border-t border-slate-100 flex items-center justify-between gap-3">
+                  <div className="pt-4 border-t border-[#1b2542] flex items-center justify-between gap-3">
                     <button
                       type="button"
                       onClick={handlePrev}
                       disabled={currentQuestionIndex === 0}
-                      className={`px-4 py-2 text-xs sm:text-sm font-semibold rounded-xl transition-colors flex items-center gap-1.5 ${
+                      className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
                         currentQuestionIndex === 0
-                          ? 'text-slate-300 cursor-not-allowed'
-                          : 'text-slate-600 hover:text-slate-800 hover:bg-slate-100 cursor-pointer'
+                          ? 'text-slate-600 bg-transparent cursor-not-allowed border border-transparent'
+                          : 'text-slate-300 hover:text-white bg-[#151f38]/60 hover:bg-[#151f38] border border-[#1e2a4a] cursor-pointer'
                       }`}
                     >
                       <ArrowLeft className="w-4 h-4" />
@@ -737,7 +773,7 @@ export const AssessmentPage = () => {
                         <button
                           type="button"
                           onClick={() => setIsReviewMode(true)}
-                          className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer hidden sm:flex items-center gap-1"
+                          className="px-3.5 py-2 text-xs font-semibold text-slate-300 hover:text-white bg-[#131d35] hover:bg-[#1a2849] border border-[#223055] rounded-xl transition-all cursor-pointer hidden sm:flex items-center gap-1"
                         >
                           <Eye className="w-3.5 h-3.5" />
                           <span>Review All</span>
@@ -749,10 +785,10 @@ export const AssessmentPage = () => {
                           type="button"
                           onClick={handleNext}
                           disabled={currentSelectedOpt === null || currentSelectedOpt === undefined}
-                          className={`px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
+                          className={`px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-all flex items-center gap-1.5 ${
                             currentSelectedOpt !== null && currentSelectedOpt !== undefined
-                              ? 'bg-[#3B50BA] hover:bg-[#31429e] text-white'
-                              : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                              ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-lg shadow-indigo-600/20 cursor-pointer active:scale-98'
+                              : 'bg-[#131d35] text-slate-500 border border-[#1b2542] cursor-not-allowed'
                           }`}
                         >
                           <span>Next Question</span>
@@ -763,10 +799,10 @@ export const AssessmentPage = () => {
                           type="button"
                           onClick={() => setIsReviewMode(true)}
                           disabled={!allAnswered}
-                          className={`px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
+                          className={`px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-all flex items-center gap-1.5 ${
                             allAnswered
-                              ? 'bg-[#3B50BA] hover:bg-[#31429e] text-white'
-                              : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                              ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-lg shadow-indigo-600/20 cursor-pointer active:scale-98'
+                              : 'bg-[#131d35] text-slate-500 border border-[#1b2542] cursor-not-allowed'
                           }`}
                         >
                           <span>Review &amp; Submit</span>
