@@ -233,10 +233,12 @@ export const competencyService = {
   /**
    * Fetch questions for a specific topic (correct answers omitted on backend)
    * @param {number|string} topicId
+   * @param {number|string} [attemptId]
    * @returns {Promise<Object>}
    */
-  async getTopicQuestions(topicId) {
-    return api.get(`/competency/topics/${topicId}/questions`);
+  async getTopicQuestions(topicId, attemptId = null) {
+    const query = attemptId ? `?attempt_id=${attemptId}` : '';
+    return api.get(`/competency/topics/${topicId}/questions${query}`);
   },
 
   /**
@@ -247,6 +249,23 @@ export const competencyService = {
    */
   async startTopicAttempt(topicId, taskId = null) {
     return api.post(`/competency/topics/${topicId}/start-attempt`, { task_id: taskId });
+  },
+
+  /**
+   * Autosave intermediate draft answers for an active assessment attempt.
+   * Uses monotonic revision versioning to prevent race condition overwrites.
+   * @param {number|string} topicId
+   * @param {number|string} attemptId
+   * @param {Object} answers - mapping of question_id -> option letter ('A'..'D')
+   * @param {number} [version=0]
+   * @returns {Promise<Object>}
+   */
+  async autosaveTopicAnswers(topicId, attemptId, answers, version = 0) {
+    return api.post(`/competency/topics/${topicId}/autosave`, {
+      attempt_id: attemptId,
+      answers,
+      version,
+    });
   },
 
   /**
@@ -273,6 +292,29 @@ export const competencyService = {
    */
   async getAttemptDetails(attemptId) {
     return api.get(`/competency/attempts/${attemptId}`);
+  },
+
+  /**
+   * Explicitly abandon an in-progress assessment attempt.
+   * @param {number|string} topicId
+   * @param {number|string} attemptId
+   * @param {string} [reason]
+   * @returns {Promise<Object>}
+   */
+  async abandonTopicAttempt(topicId, attemptId, reason = 'Candidate abandoned assessment') {
+    return api.post(`/competency/topics/${topicId}/abandon`, {
+      attempt_id: attemptId,
+      reason,
+    });
+  },
+
+  /**
+   * Fetch historical attempts for the authenticated agent on a topic.
+   * @param {number|string} topicId
+   * @returns {Promise<Object>}
+   */
+  async getTopicAttemptHistory(topicId) {
+    return api.get(`/competency/topics/${topicId}/history`);
   },
 
   /**

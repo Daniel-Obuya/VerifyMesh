@@ -389,6 +389,14 @@ export const ProfilePage = () => {
         </span>
       );
     }
+    if (status === 'EXPIRED') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-950/60 text-rose-300 border border-rose-500/40">
+          <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+          <span>Expired</span>
+        </span>
+      );
+    }
     if (status === 'REJECTED') {
       return (
         <div className="flex flex-col items-start gap-1">
@@ -939,7 +947,7 @@ export const ProfilePage = () => {
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
+                    <div className="sm:col-span-2">
                       <label className="block text-xs font-semibold text-slate-300 mb-1">
                         Full Legal Name <span className="text-rose-400">*</span>
                       </label>
@@ -950,19 +958,6 @@ export const ProfilePage = () => {
                         className="w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white focus:outline-none focus:border-[#5a69f0] focus:ring-1 focus:ring-[#5a69f0]"
                         placeholder="e.g. Full Legal Name"
                         required
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-300 mb-1">
-                        Education &amp; Background
-                      </label>
-                      <input 
-                        type="text"
-                        value={personalForm.education}
-                        onChange={(e) => setPersonalForm({ ...personalForm, education: e.target.value })}
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#080d1c] border border-[#232f52] text-sm text-white focus:outline-none focus:border-[#5a69f0] focus:ring-1 focus:ring-[#5a69f0]"
-                        placeholder="e.g. B.S. in Business Administration"
                       />
                     </div>
 
@@ -1019,13 +1014,6 @@ export const ProfilePage = () => {
                     </div>
 
                     <div>
-                      <span className="text-xs text-[#8d97b8] font-medium block">Education &amp; Background</span>
-                      <p className="text-sm font-semibold text-white mt-1">
-                        {profileData?.education || 'Not specified'}
-                      </p>
-                    </div>
-
-                    <div>
                       <span className="text-xs text-[#8d97b8] font-medium block">Availability Status</span>
                       <p className="text-sm font-semibold text-white mt-1">
                         {profileData?.availability_status === 'AVAILABLE' 
@@ -1033,13 +1021,6 @@ export const ProfilePage = () => {
                           : profileData?.availability_status === 'PARTIALLY_AVAILABLE'
                           ? 'Partially Available'
                           : profileData?.availability_status || 'Available'}
-                      </p>
-                    </div>
-
-                    <div>
-                      <span className="text-xs text-[#8d97b8] font-medium block">Location</span>
-                      <p className="text-sm font-semibold text-white mt-1">
-                        {profileData?.location || 'Not specified'}
                       </p>
                     </div>
                   </div>
@@ -1102,9 +1083,9 @@ export const ProfilePage = () => {
             <div className="bg-[#0b1020]/90 border border-[#24335c]/80 rounded-2xl p-6 sm:p-8 shadow-[0_0_30px_rgba(15,23,42,0.8)] backdrop-blur-xl space-y-6">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-[#1b2542]">
                 <div>
-                  <h2 className="text-lg font-bold font-sora text-white">Work Experience &amp; Verified Tenures</h2>
+                  <h2 className="text-lg font-bold font-sora text-white">Work Experience &amp; Career History</h2>
                   <p className="text-xs text-[#8d97b8] mt-0.5">
-                    Records are reviewed by administrators. Verified months are calculated without double-counting overlapping tenures.
+                    Employment history confirmed through employer references. Verified tenure satisfies mandatory task prerequisites.
                   </p>
                 </div>
 
@@ -1119,43 +1100,68 @@ export const ProfilePage = () => {
               </div>
 
               {/* Verified Experience Metric Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52]">
-                  <span className="text-[11px] font-semibold text-[#8d97b8] uppercase tracking-wider block">
-                    Total Verified Experience
-                  </span>
-                  <p className="text-2xl font-bold text-white mt-1">
-                    {verifiedExp.total_experience_months} <span className="text-xs font-normal text-slate-400">months</span>
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    ({(verifiedExp.total_experience_months / 12).toFixed(1)} years merged)
-                  </p>
-                </div>
+              {(() => {
+                const totalRoles = experiences.length;
+                const verifiedRoles = experiences.filter(e => (e.verification_status || e.status) === 'VERIFIED').length;
 
-                <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52]">
-                  <span className="text-[11px] font-semibold text-[#8d97b8] uppercase tracking-wider block">
-                    Verified Sales Experience
-                  </span>
-                  <p className="text-2xl font-bold text-white mt-1">
-                    {verifiedExp.sales_experience_months} <span className="text-xs font-normal text-slate-400">months</span>
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    Input: <code className="text-xs font-mono text-indigo-300">sales_experience_months</code>
-                  </p>
-                </div>
+                // Determine primary domain
+                let primaryDomain = 'General Professional';
+                let primaryMonths = verifiedExp.total_experience_months;
+                if (verifiedExp.customer_service_experience_months > verifiedExp.sales_experience_months && verifiedExp.customer_service_experience_months > 0) {
+                  primaryDomain = 'Customer Service';
+                  primaryMonths = verifiedExp.customer_service_experience_months;
+                } else if (verifiedExp.sales_experience_months > 0) {
+                  primaryDomain = 'Sales & Business Dev';
+                  primaryMonths = verifiedExp.sales_experience_months;
+                } else if (experiences.length > 0 && experiences[0].work_category) {
+                  primaryDomain = experiences[0].work_category;
+                }
 
-                <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52]">
-                  <span className="text-[11px] font-semibold text-[#8d97b8] uppercase tracking-wider block">
-                    Verified Customer Service
-                  </span>
-                  <p className="text-2xl font-bold text-white mt-1">
-                    {verifiedExp.customer_service_experience_months} <span className="text-xs font-normal text-slate-400">months</span>
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    Input: <code className="text-xs font-mono text-indigo-300">customer_service_experience_months</code>
-                  </p>
-                </div>
-              </div>
+                const yearsText = (verifiedExp.total_experience_months / 12).toFixed(1);
+
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52]">
+                      <span className="text-[11px] font-semibold text-[#8d97b8] uppercase tracking-wider block">
+                        Total Experience
+                      </span>
+                      <p className="text-2xl font-bold text-white mt-1">
+                        {verifiedExp.total_experience_months} <span className="text-xs font-normal text-slate-400">months</span>
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        ~{yearsText} years verified career tenure
+                      </p>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52]">
+                      <span className="text-[11px] font-semibold text-[#8d97b8] uppercase tracking-wider block">
+                        Verified Positions
+                      </span>
+                      <p className="text-2xl font-bold text-emerald-400 mt-1 flex items-center gap-2">
+                        {verifiedRoles}
+                        {verifiedRoles > 0 && <CheckCircle2 className="w-5 h-5 text-emerald-400" />}
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        {totalRoles} total position{totalRoles !== 1 ? 's' : ''} submitted
+                      </p>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52]">
+                      <span className="text-[11px] font-semibold text-[#8d97b8] uppercase tracking-wider block">
+                        Primary Specialization
+                      </span>
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-950/70 text-indigo-300 border border-indigo-500/40">
+                          {primaryDomain}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        {primaryMonths > 0 ? `${primaryMonths} months confirmed in this field` : 'Add positions to build domain tenure'}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Experience Records List */}
               <div className="space-y-3 pt-2">
@@ -1285,49 +1291,78 @@ export const ProfilePage = () => {
               </div>
 
               {/* Verified Certifications Metric Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52]">
-                  <span className="text-[11px] font-semibold text-[#8d97b8] uppercase tracking-wider block">
-                    Total Certifications
-                  </span>
-                  <p className="text-2xl font-bold text-white mt-1">
-                    {verifiedCerts.certification_count}
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    Verified and active credentials
-                  </p>
-                </div>
+              {(() => {
+                const totalCertCount = certifications.length;
+                const activeVerifiedCount = certifications.filter(c => c.status === 'VERIFIED' && !c.is_expired).length;
+                const expiredCount = certifications.filter(c => c.status === 'EXPIRED' || c.is_expired).length;
+                const pendingCertCount = certifications.filter(c => c.status === 'PENDING').length;
 
-                <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52]">
-                  <span className="text-[11px] font-semibold text-[#8d97b8] uppercase tracking-wider block">
-                    Domain Relevant Certification
-                  </span>
-                  <div className="mt-1 flex items-center gap-2">
-                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
-                      verifiedCerts.relevant_certification 
-                        ? 'bg-emerald-950/60 text-emerald-400 border-emerald-500/40' 
-                        : 'bg-slate-900 text-slate-400 border-slate-700'
-                    }`}>
-                      {verifiedCerts.relevant_certification ? 'Domain Qualified (1)' : 'Standard (0)'}
-                    </span>
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52]">
+                      <span className="text-[11px] font-semibold text-[#8d97b8] uppercase tracking-wider block">
+                        Total Submitted
+                      </span>
+                      <p className="text-2xl font-bold text-white mt-1">
+                        {totalCertCount}
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Submitted credentials &amp; licenses
+                      </p>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52]">
+                      <span className="text-[11px] font-semibold text-[#8d97b8] uppercase tracking-wider block">
+                        Active Verified
+                      </span>
+                      <p className="text-2xl font-bold text-emerald-400 mt-1 flex items-center gap-2">
+                        {activeVerifiedCount}
+                        {activeVerifiedCount > 0 && <CheckCircle2 className="w-5 h-5 text-emerald-400" />}
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        {expiredCount > 0 ? `${expiredCount} credential expired` : 'Active on official registers'}
+                      </p>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52]">
+                      <span className="text-[11px] font-semibold text-[#8d97b8] uppercase tracking-wider block">
+                        Credential Status
+                      </span>
+                      <div className="mt-1.5 flex items-center">
+                        {pendingCertCount > 0 ? (
+                          <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-950/60 text-amber-300 border border-amber-500/40 inline-flex items-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5" />
+                            {pendingCertCount} Pending Review
+                          </span>
+                        ) : expiredCount > 0 ? (
+                          <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-950/60 text-rose-300 border border-rose-500/40 inline-flex items-center gap-1.5">
+                            <AlertCircle className="w-3.5 h-3.5" />
+                            {expiredCount} Expired (Action Needed)
+                          </span>
+                        ) : activeVerifiedCount > 0 ? (
+                          <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-950/60 text-emerald-300 border border-emerald-500/40 inline-flex items-center gap-1.5">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            All Verified &amp; Active
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-900 text-slate-400 border border-slate-700">
+                            No Active Credentials
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        {expiredCount > 0 
+                          ? 'Expired credentials must be renewed for tasks' 
+                          : pendingCertCount > 0 
+                          ? 'Workforce Officer review in progress' 
+                          : activeVerifiedCount > 0 
+                          ? 'Satisfies mandatory task prerequisites' 
+                          : 'Add certifications to unlock specializations'}
+                      </p>
+                    </div>
                   </div>
-                  <p className="text-[11px] text-slate-400 mt-1">
-                    Input: <code className="text-xs font-mono text-indigo-300">relevant_certification</code>
-                  </p>
-                </div>
-
-                <div className="p-4 rounded-xl bg-[#0e162d] border border-[#232f52]">
-                  <span className="text-[11px] font-semibold text-[#8d97b8] uppercase tracking-wider block">
-                    Certified Leverage Multiplier
-                  </span>
-                  <p className="text-2xl font-bold text-white mt-1">
-                    {verifiedCerts.certified_leverage}
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    Input: <code className="text-xs font-mono text-indigo-300">certified_leverage</code>
-                  </p>
-                </div>
-              </div>
+                );
+              })()}
 
               {/* Certifications List */}
               <div className="space-y-3 pt-2">
@@ -1354,11 +1389,20 @@ export const ProfilePage = () => {
                             )}
                             <span>Issued: {formatDate(cert.issue_date)}</span>
                             {cert.expiry_date ? (
-                              <span>Expires: {formatDate(cert.expiry_date)}</span>
+                              <span className={cert.is_expired ? 'text-rose-400 font-semibold' : ''}>
+                                Expires: {formatDate(cert.expiry_date)} {cert.is_expired && '(Expired)'}
+                              </span>
                             ) : (
                               <span className="text-slate-500">No Expiration</span>
                             )}
                           </div>
+
+                          {cert.is_expired && (
+                            <p className="text-[11px] text-rose-400 mt-1.5 font-medium flex items-center gap-1">
+                              <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                              <span>This credential expired on {formatDate(cert.expiry_date)} and is no longer valid for active task requirements.</span>
+                            </p>
+                          )}
 
                           {cert.credential_url && (
                             <div className="mt-2">
@@ -1406,7 +1450,7 @@ export const ProfilePage = () => {
                     <Award className="w-8 h-8 text-slate-500 mx-auto mb-2" />
                     <p className="text-sm font-semibold text-slate-300">No certifications submitted yet</p>
                     <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-                      Submit your professional licenses or training credentials to satisfy task requirements and boost model evaluation scores.
+                      Submit your professional licenses or training credentials to satisfy task prerequisites and qualify for specialized opportunities.
                     </p>
                     <button 
                       type="button"
@@ -1486,7 +1530,7 @@ export const ProfilePage = () => {
                   <option value="Other">General / Other Professional Experience</option>
                 </select>
                 <p className="text-[11px] text-slate-400 mt-1">
-                  Category determines which model feature input (Sales vs Customer Service) is credited.
+                  Category determines which domain specialization (Sales vs Customer Service) is credited.
                 </p>
               </div>
 

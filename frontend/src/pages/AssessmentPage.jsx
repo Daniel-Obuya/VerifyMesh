@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { 
   ArrowLeft, 
@@ -14,7 +14,8 @@ import {
   Eye, 
   HelpCircle,
   ChevronRight,
-  AlertTriangle
+  AlertTriangle,
+  RefreshCw
 } from 'lucide-react';
 import { competencyService } from '../services/competencyService';
 import { useAuth } from '../context/AuthContext';
@@ -40,6 +41,14 @@ export const AssessmentPage = () => {
   const [questions, setQuestions] = useState([]);
   const [selectedAnswers, setSelectedAnswers] = useState({});
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+
+  // Autosave and attempt resumption states
+  const [autosaveStatus, setAutosaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'failed'
+  const [answersVersion, setAnswersVersion] = useState(0);
+  const [lastSavedTime, setLastSavedTime] = useState(null);
+  const autosaveTimeoutRef = useRef(null);
+  const pendingAnswersRef = useRef(null);
+  const answersVersionRef = useRef(0);
 
   // Loading and error states
   const [isStartingAttempt, setIsStartingAttempt] = useState(false);
@@ -135,7 +144,70 @@ export const AssessmentPage = () => {
     };
   }, [taskId, requestedTopicId]);
 
-  // 2. Handle Starting Assessment Attempt
+  // Sync version ref
+  useEffect(() => {
+    answersVersionRef.current = answersVersion;
+  }, [answersVersion]);
+
+  // Autosave background sync
+  const performAutosave = useCallback(async (answersToSave) => {
+    if (!attemptId || !selectedTopic) return;
+    setAutosaveStatus('saving');
+    try {
+      const nextVer = answersVersionRef.current + 1;
+      const res = await competencyService.autosaveTopicAnswers(
+        selectedTopic.topic_id,
+        attemptId,
+        answersToSave,
+        nextVer
+      );
+      if (res?.success && res.data) {
+        setAnswersVersion(res.data.answers_version);
+        answersVersionRef.current = res.data.answers_version;
+        setLastSavedTime(res.data.last_saved_at || new Date().toISOString());
+        setAutosaveStatus('saved');
+      } else {
+        setAutosaveStatus('failed');
+      }
+    } catch (err) {
+      console.warn('Autosave background sync failed:', err);
+      setAutosaveStatus('failed');
+    }
+  }, [attemptId, selectedTopic]);
+
+  const queueAutosave = useCallback((newAnswers) => {
+    pendingAnswersRef.current = newAnswers;
+    if (autosaveTimeoutRef.current) {
+      clearTimeout(autosaveTimeoutRef.current);
+    }
+    setAutosaveStatus('saving');
+    autosaveTimeoutRef.current = setTimeout(() => {
+      performAutosave(pendingAnswersRef.current);
+    }, 600);
+  }, [performAutosave]);
+
+  // Flush pending autosave before tab unload
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (autosaveTimeoutRef.current && pendingAnswersRef.current && attemptId && selectedTopic) {
+        competencyService.autosaveTopicAnswers(
+          selectedTopic.topic_id,
+          attemptId,
+          pendingAnswersRef.current,
+          answersVersionRef.current + 1
+        );
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      if (autosaveTimeoutRef.current) {
+        clearTimeout(autosaveTimeoutRef.current);
+      }
+    };
+  }, [attemptId, selectedTopic]);
+
+  // 2. Handle Starting or Resuming Assessment Attempt
   const handleStartAssessment = async () => {
     if (!selectedTopic) return;
 
@@ -145,34 +217,65 @@ export const AssessmentPage = () => {
     try {
       const numericTaskId = task?.task_id || (taskId && !isNaN(Number(taskId)) ? Number(taskId) : null);
       
-      // Authoritative attempt creation on server
+      // Authoritative attempt creation or resumption on server
       const attemptRes = await competencyService.startTopicAttempt(selectedTopic.topic_id, numericTaskId);
       
       if (!attemptRes?.success || !attemptRes.data) {
         throw new Error(attemptRes?.error || 'Failed to initialize assessment attempt.');
       }
 
-      const { attempt_id, expires_at } = attemptRes.data;
+      const { 
+        attempt_id, 
+        expires_at, 
+        questions: returnedQuestions,
+        saved_answers,
+        answers_version,
+        last_saved_at
+      } = attemptRes.data;
+
       setAttemptId(attempt_id);
       setAttemptExpiresAt(expires_at);
-
-      // Load server-gradeable questions (omits correct_answer)
-      const qRes = await competencyService.getTopicQuestions(selectedTopic.topic_id);
-      if (!qRes?.success || !Array.isArray(qRes.data) || qRes.data.length === 0) {
-        throw new Error(qRes?.error || 'No questions configured for this topic.');
+      if (answers_version) {
+        setAnswersVersion(answers_version);
+        answersVersionRef.current = answers_version;
+      }
+      if (last_saved_at) {
+        setLastSavedTime(last_saved_at);
       }
 
-      const loadedQuestions = qRes.data;
+      // Load server-gradeable questions using the attempt's snapshot
+      let loadedQuestions = returnedQuestions;
+      if (!Array.isArray(loadedQuestions) || loadedQuestions.length === 0) {
+        const qRes = await competencyService.getTopicQuestions(selectedTopic.topic_id, attempt_id);
+        if (!qRes?.success || !Array.isArray(qRes.data) || qRes.data.length === 0) {
+          throw new Error(qRes?.error || 'No questions configured for this topic.');
+        }
+        loadedQuestions = qRes.data;
+      }
+
       setQuestions(loadedQuestions);
 
-      // Initialize answers map
+      // Initialize answers map, restoring previously saved draft answers if resuming
       const initialAnswers = {};
       loadedQuestions.forEach(q => {
-        initialAnswers[String(q.question_id)] = null;
+        const qStr = String(q.question_id);
+        initialAnswers[qStr] = (saved_answers && saved_answers[qStr] !== undefined && saved_answers[qStr] !== null)
+          ? saved_answers[qStr]
+          : null;
       });
       setSelectedAnswers(initialAnswers);
 
-      setCurrentQuestionIndex(0);
+      // Auto-jump to the first unanswered question
+      const firstUnansweredIndex = loadedQuestions.findIndex(q => {
+        const ans = initialAnswers[String(q.question_id)];
+        return ans === null || ans === undefined;
+      });
+      setCurrentQuestionIndex(firstUnansweredIndex >= 0 ? firstUnansweredIndex : 0);
+
+      if (saved_answers && Object.keys(saved_answers).length > 0) {
+        setAutosaveStatus('saved');
+      }
+
       setIsReviewMode(false);
       setIsInProgress(true);
     } catch (err) {
@@ -183,15 +286,17 @@ export const AssessmentPage = () => {
     }
   };
 
-  // 3. Option Selection
+  // 3. Option Selection with Debounced Autosave
   const handleSelectOption = (questionId, optionId) => {
-    setSelectedAnswers(prev => ({
-      ...prev,
+    const updated = {
+      ...selectedAnswers,
       [String(questionId)]: optionId
-    }));
+    };
+    setSelectedAnswers(updated);
+    queueAutosave(updated);
   };
 
-  // 4. Stepper Navigation
+  // 4. Stepper Navigation with Immediate Flush
   const totalQuestions = questions.length;
   const answeredCount = Object.values(selectedAnswers).filter(v => v !== null && v !== undefined).length;
   const allAnswered = totalQuestions > 0 && answeredCount === totalQuestions;
@@ -201,6 +306,10 @@ export const AssessmentPage = () => {
   const currentSelectedOpt = currentQIdStr ? selectedAnswers[currentQIdStr] : null;
 
   const handleNext = () => {
+    if (autosaveTimeoutRef.current && pendingAnswersRef.current) {
+      clearTimeout(autosaveTimeoutRef.current);
+      performAutosave(pendingAnswersRef.current);
+    }
     if (currentQuestionIndex < totalQuestions - 1) {
       setCurrentQuestionIndex(prev => prev + 1);
     } else {
@@ -217,6 +326,10 @@ export const AssessmentPage = () => {
   };
 
   const handleJumpToQuestion = (idx) => {
+    if (autosaveTimeoutRef.current && pendingAnswersRef.current) {
+      clearTimeout(autosaveTimeoutRef.current);
+      performAutosave(pendingAnswersRef.current);
+    }
     setCurrentQuestionIndex(idx);
     setIsReviewMode(false);
   };
@@ -226,6 +339,11 @@ export const AssessmentPage = () => {
     if (!allAnswered) {
       setErrorMessage(`Please answer all ${totalQuestions} scenario questions before submitting.`);
       return;
+    }
+
+    if (autosaveTimeoutRef.current && pendingAnswersRef.current) {
+      clearTimeout(autosaveTimeoutRef.current);
+      performAutosave(pendingAnswersRef.current);
     }
 
     setIsSubmitting(true);
@@ -252,6 +370,25 @@ export const AssessmentPage = () => {
       setErrorMessage(err?.data?.error || err?.message || 'Error submitting assessment. Progress was preserved.');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // 6. Explicit Abandonment
+  const handleAbandonAssessment = async () => {
+    const confirmed = window.confirm(
+      'Are you sure you want to abandon this assessment? This will forfeit your current attempt and count toward your maximum attempt limit.'
+    );
+    if (!confirmed || !attemptId || !selectedTopic) return;
+    try {
+      await competencyService.abandonTopicAttempt(
+        selectedTopic.topic_id,
+        attemptId,
+        'Candidate explicitly abandoned assessment'
+      );
+      navigate('/dashboard');
+    } catch (err) {
+      console.error('Error abandoning assessment:', err);
+      setErrorMessage(err?.data?.error || err?.message || 'Failed to abandon attempt.');
     }
   };
 
@@ -504,30 +641,49 @@ export const AssessmentPage = () => {
                 </div>
 
                 {/* Action CTA */}
-                <div className="pt-4 flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-[#1b2542]">
-                  <span className="text-xs text-slate-400">
-                    Ready to begin? Click below to launch the dedicated evaluation workspace.
-                  </span>
+                {Boolean(task?.prerequisites && (task.prerequisites.certification_met === false || task.prerequisites.experience_met === false)) ? (
+                  <div className="pt-4 p-4 rounded-xl bg-amber-950/40 border border-amber-500/30 flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div className="flex items-start gap-2.5">
+                      <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-xs font-semibold text-amber-200">Prerequisites Not Met</p>
+                        <p className="text-xs text-amber-300/80 mt-0.5">{task.blocking_reason || 'You do not currently satisfy the minimum experience or certification prerequisites for this task.'}</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => navigate('/dashboard')}
+                      className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs border border-slate-700 transition-colors cursor-pointer shrink-0"
+                    >
+                      Back to Opportunities
+                    </button>
+                  </div>
+                ) : (
+                  <div className="pt-4 flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-[#1b2542]">
+                    <span className="text-xs text-slate-400">
+                      Ready to begin? Click below to launch the dedicated evaluation workspace.
+                    </span>
 
-                  <button
-                    type="button"
-                    onClick={handleStartAssessment}
-                    disabled={isStartingAttempt}
-                    className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-indigo-700 hover:from-blue-500 hover:to-indigo-600 disabled:opacity-50 text-white font-bold text-sm shadow-lg shadow-indigo-600/30 hover:shadow-indigo-600/50 transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-98"
-                  >
-                    {isStartingAttempt ? (
-                      <>
-                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        <span>Initializing Attempt...</span>
-                      </>
-                    ) : (
-                      <>
-                        <span>Start Assessment</span>
-                        <ArrowRight className="w-4 h-4" />
-                      </>
-                    )}
-                  </button>
-                </div>
+                    <button
+                      type="button"
+                      onClick={handleStartAssessment}
+                      disabled={isStartingAttempt}
+                      className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-indigo-700 hover:from-blue-500 hover:to-indigo-600 disabled:opacity-50 text-white font-bold text-sm shadow-lg shadow-indigo-600/30 hover:shadow-indigo-600/50 transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+                    >
+                      {isStartingAttempt ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          <span>Initializing Attempt...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Start Assessment</span>
+                          <ArrowRight className="w-4 h-4" />
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -548,7 +704,27 @@ export const AssessmentPage = () => {
                   </h2>
                 </div>
 
-                <div className="text-right">
+                <div className="flex items-center gap-2">
+                  {/* Autosave Status Pill */}
+                  {autosaveStatus === 'saving' && (
+                    <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] font-medium text-indigo-400 bg-indigo-950/40 px-2.5 py-1 rounded-full border border-indigo-500/30 animate-pulse">
+                      <RefreshCw className="w-3 h-3 animate-spin text-indigo-400" />
+                      <span>Saving draft...</span>
+                    </span>
+                  )}
+                  {autosaveStatus === 'saved' && (
+                    <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-400 bg-emerald-950/40 px-2.5 py-1 rounded-full border border-emerald-500/30">
+                      <Check className="w-3 h-3 stroke-[2.5]" />
+                      <span>Answers saved</span>
+                    </span>
+                  )}
+                  {autosaveStatus === 'failed' && (
+                    <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] font-medium text-amber-400 bg-amber-950/40 px-2.5 py-1 rounded-full border border-amber-500/30">
+                      <AlertCircle className="w-3 h-3 text-amber-400" />
+                      <span>Sync pending</span>
+                    </span>
+                  )}
+
                   <span className={`text-xs font-bold px-2.5 py-1 rounded-full border ${
                     allAnswered 
                       ? 'bg-emerald-950/60 text-emerald-400 border-emerald-500/40' 
@@ -674,14 +850,24 @@ export const AssessmentPage = () => {
 
                 {/* Review Footer Controls */}
                 <div className="pt-4 border-t border-[#1b2542] flex items-center justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setIsReviewMode(false)}
-                    className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold text-slate-300 hover:text-white bg-[#151f38]/60 hover:bg-[#151f38] border border-[#1e2a4a] transition-all cursor-pointer"
-                  >
-                    <ArrowLeft className="w-4 h-4" />
-                    <span>Back to Questions</span>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsReviewMode(false)}
+                      className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold text-slate-300 hover:text-white bg-[#151f38]/60 hover:bg-[#151f38] border border-[#1e2a4a] transition-all cursor-pointer"
+                    >
+                      <ArrowLeft className="w-4 h-4" />
+                      <span>Back to Questions</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleAbandonAssessment}
+                      className="text-xs font-semibold text-rose-400 hover:text-rose-300 hover:underline px-3 py-2 cursor-pointer transition-colors"
+                      title="Forfeit and abandon current attempt"
+                    >
+                      Abandon Attempt
+                    </button>
+                  </div>
 
                   <button
                     type="button"

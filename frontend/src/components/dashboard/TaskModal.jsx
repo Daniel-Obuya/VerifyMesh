@@ -259,21 +259,8 @@ export const TaskModal = ({
               )}
             </div>
 
-            {/* Other 3 Requirements Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-left">
-              {/* Competency Level */}
-              <div className="p-3 rounded-xl bg-[#0e162d] border border-[#232f52]">
-                <span className="text-[10px] font-semibold text-slate-400 uppercase block">Required Competency</span>
-                <p className="text-xs font-bold text-white mt-0.5">
-                  {task.required_competency || 'Eligible'}
-                </p>
-                <p className={`text-[11px] mt-1 font-medium ${
-                  task.prerequisites?.competency_met ? 'text-emerald-400' : 'text-amber-400'
-                }`}>
-                  {task.prerequisites?.competency_met ? '✓ Met' : `Current: ${userCompetency || 'Unassessed'}`}
-                </p>
-              </div>
-
+            {/* Prerequisite Requirements Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-left">
               {/* Mandatory Certification */}
               <div className="p-3 rounded-xl bg-[#0e162d] border border-[#232f52]">
                 <span className="text-[10px] font-semibold text-slate-400 uppercase block">Certification</span>
@@ -291,7 +278,7 @@ export const TaskModal = ({
               <div className="p-3 rounded-xl bg-[#0e162d] border border-[#232f52]">
                 <span className="text-[10px] font-semibold text-slate-400 uppercase block">Min. Experience</span>
                 <p className="text-xs font-bold text-white mt-0.5">
-                  {task.minimum_experience_months || 0} Months
+                  {task.minimum_experience_months ? `${task.minimum_experience_months} Months` : 'None required'}
                 </p>
                 <p className={`text-[11px] mt-1 font-medium ${
                   task.prerequisites?.experience_met ? 'text-emerald-400' : 'text-amber-400'

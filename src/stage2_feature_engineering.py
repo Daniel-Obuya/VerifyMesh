@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------------
-# 1. Canonical Feature Definitions (Exact 5-Feature Phase 3/4 Schema)
+# 1. Canonical Feature Definitions (Exact 5-Feature Phase 3/4/5 Schemas)
 # ---------------------------------------------------------------------------
 
 STAGE2_V2_FEATURES: list[str] = [
@@ -54,6 +54,37 @@ STAGE2_V2_FEATURE_DESCRIPTIONS: dict[str, str] = {
     ),
     "difficulty_tier": (
         "Numeric task difficulty tier (1 = Low / Foundational, 2 = Medium / Standard, 3 = High / Advanced)."
+    ),
+}
+
+# Phase 4/5 Redesigned Non-Redundant Feature Schema
+STAGE2_V3_FEATURES: list[str] = [
+    "weighted_skill_margin",
+    "min_skill_margin",
+    "deficit_competencies_ratio",
+    "exp_surplus_tanh",
+    "difficulty_tier",
+]
+
+STAGE2_V3_FEATURE_DESCRIPTIONS: dict[str, str] = {
+    "weighted_skill_margin": (
+        "Category-weighted competency surplus across task-required assessment topics "
+        "normalized to sum to 1.0 relative to task minimum cutoffs."
+    ),
+    "min_skill_margin": (
+        "Smallest individual competency margin across task-required assessment topics "
+        "and overall assessment pass mark, capturing the depth of the applicant's weakest skill."
+    ),
+    "deficit_competencies_ratio": (
+        "Proportion of task-required competencies where the applicant scored below "
+        "the passing cutoff (deficit_count / required_topics_count in [0.0, 1.0]), capturing the breadth of sub-skill failure."
+    ),
+    "exp_surplus_tanh": (
+        "Saturating relevant verified experience surplus above task minimum: "
+        "tanh((task_relevant_exp - task_min_exp) / 12.0) in [-1.0, 1.0]."
+    ),
+    "difficulty_tier": (
+        "Numeric task difficulty tier (1.0 = Low / Foundational, 2.0 = Medium / Standard, 3.0 = High / Advanced)."
     ),
 }
 
@@ -114,37 +145,64 @@ CATEGORY_SUBSKILL_BASELINES: dict[str, dict[str, float]] = {
 }
 
 
-def resolve_domain_weights(task_category: str | None) -> dict[str, float]:
+def resolve_domain_weights(
+    task_category: str | None,
+    required_competencies: list[str] | set[str] | None = None,
+) -> dict[str, float]:
     """
     Map a task category name (from synthetic data or live DB) to domain skill weights.
+    If required_competencies is specified, irrelevant competency weights are excluded
+    and weights are strictly normalized over the required competencies to sum to 1.0.
     """
     if not task_category:
-        return DEFAULT_DOMAIN_WEIGHTS
-    if task_category in CATEGORY_DOMAIN_WEIGHTS:
-        return CATEGORY_DOMAIN_WEIGHTS[task_category]
+        raw_weights = dict(DEFAULT_DOMAIN_WEIGHTS)
+    elif task_category in CATEGORY_DOMAIN_WEIGHTS:
+        raw_weights = dict(CATEGORY_DOMAIN_WEIGHTS[task_category])
+    else:
+        cat_lower = str(task_category).lower()
+        if "sales" in cat_lower and ("retention" in cat_lower or "account" in cat_lower):
+            raw_weights = dict(CATEGORY_DOMAIN_WEIGHTS["Account Retention & Growth"])
+        elif "sales" in cat_lower:
+            raw_weights = dict(CATEGORY_DOMAIN_WEIGHTS["Enterprise Sales"])
+        elif "support" in cat_lower or "service" in cat_lower or "escalation" in cat_lower:
+            raw_weights = dict(CATEGORY_DOMAIN_WEIGHTS["Customer Support Escalations"])
+        elif "tech" in cat_lower or "product" in cat_lower or "onboarding" in cat_lower:
+            raw_weights = dict(CATEGORY_DOMAIN_WEIGHTS["Technical Product Onboarding"])
+        elif "quality" in cat_lower or "compliance" in cat_lower or "qa" in cat_lower:
+            raw_weights = dict(CATEGORY_DOMAIN_WEIGHTS["Quality Assurance & Compliance"])
+        else:
+            raw_weights = dict(DEFAULT_DOMAIN_WEIGHTS)
 
-    cat_lower = str(task_category).lower()
-    if "sales" in cat_lower and ("retention" in cat_lower or "account" in cat_lower):
-        return CATEGORY_DOMAIN_WEIGHTS["Account Retention & Growth"]
-    if "sales" in cat_lower:
-        return CATEGORY_DOMAIN_WEIGHTS["Enterprise Sales"]
-    if "support" in cat_lower or "service" in cat_lower or "escalation" in cat_lower:
-        return CATEGORY_DOMAIN_WEIGHTS["Customer Support Escalations"]
-    if "tech" in cat_lower or "product" in cat_lower or "onboarding" in cat_lower:
-        return CATEGORY_DOMAIN_WEIGHTS["Technical Product Onboarding"]
-    if "quality" in cat_lower or "compliance" in cat_lower or "qa" in cat_lower:
-        return CATEGORY_DOMAIN_WEIGHTS["Quality Assurance & Compliance"]
-    return DEFAULT_DOMAIN_WEIGHTS
+    if required_competencies is None:
+        return raw_weights
+
+    # Task-specific normalization: only competencies required by the task receive non-zero weight
+    req_set = {str(c).lower() for c in required_competencies}
+    applicable_sum = sum(raw_weights.get(k, 0.0) for k in req_set if k in raw_weights)
+    if applicable_sum > 0.0:
+        return {
+            k: (raw_weights.get(k, 0.0) / applicable_sum if k in req_set else 0.0)
+            for k in ["comm", "prod", "sales", "cs"]
+        }
+    elif req_set:
+        uniform_w = 1.0 / len(req_set)
+        return {
+            k: (uniform_w if k in req_set else 0.0)
+            for k in ["comm", "prod", "sales", "cs"]
+        }
+    return raw_weights
 
 
 def resolve_subskill_minimums(
     task_category: str | None,
     difficulty_tier: int | float = 2,
     min_assessment: float = 70.0,
+    task_custom_minimums: dict[str, float] | None = None,
 ) -> dict[str, float]:
     """
     Deterministically derive task sub-skill minimum thresholds when a database task
     specifies only an overall pass mark, task category, and difficulty tier.
+    Accepts task_custom_minimums to override defaults with explicit database requirements.
     """
     tier_offset = (float(difficulty_tier) - 2.0) * 4.0
     cat_key = None
@@ -165,20 +223,27 @@ def resolve_subskill_minimums(
 
     if cat_key:
         base = CATEGORY_SUBSKILL_BASELINES[cat_key]
-        return {
+        resolved = {
             "task_min_comm": float(np.clip(base["comm"] + tier_offset, 45.0, 90.0)),
             "task_min_prod": float(np.clip(base["prod"] + tier_offset, 45.0, 90.0)),
             "task_min_sales": float(np.clip(base["sales"] + tier_offset, 45.0, 90.0)),
             "task_min_cs": float(np.clip(base["cs"] + tier_offset, 45.0, 90.0)),
         }
+    else:
+        base_val = float(np.clip(min_assessment, 50.0, 85.0))
+        resolved = {
+            "task_min_comm": base_val,
+            "task_min_prod": base_val,
+            "task_min_sales": base_val,
+            "task_min_cs": base_val,
+        }
 
-    base_val = float(np.clip(min_assessment, 50.0, 85.0))
-    return {
-        "task_min_comm": base_val,
-        "task_min_prod": base_val,
-        "task_min_sales": base_val,
-        "task_min_cs": base_val,
-    }
+    if task_custom_minimums:
+        for k, v in task_custom_minimums.items():
+            if v is not None:
+                resolved[k] = float(v)
+
+    return resolved
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +313,16 @@ def compute_stage2_features_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     out["exp_surplus_tanh"] = np.tanh(
         out["experience_surplus_months"].astype(float) / 12.0
     )
+
+    # Stage 2 v3 engineered features: distinct deficit breadth metrics
+    gap_cols = [c for c in ["communication_gap", "product_knowledge_gap", "sales_skill_gap", "customer_service_gap"] if c in out.columns]
+    if gap_cols:
+        deficit_matrix = (out[gap_cols] < 0).astype(int)
+        out["deficit_competencies_count"] = deficit_matrix.sum(axis=1)
+        out["deficit_competencies_ratio"] = out["deficit_competencies_count"] / float(len(gap_cols))
+    else:
+        out["deficit_competencies_count"] = 0
+        out["deficit_competencies_ratio"] = 0.0
 
     # Legacy 28 engineered features
     if "applicant_relevant_exp" in out.columns and "task_min_exp" in out.columns:
@@ -356,16 +431,48 @@ def build_complete_stage2_feature_dict(raw_input: dict[str, Any]) -> dict[str, f
     sales_gap = _strict_float(d.get("sales_skill_gap", app_sales - task_min_sales), "sales_skill_gap")
     cs_gap = _strict_float(d.get("customer_service_gap", app_cs - task_min_cs), "customer_service_gap")
 
+    # Topic ID to competency slug mapping
+    topic_id_to_slug = {1: "prod", 2: "sales", 3: "comm", 4: "cs"}
+    slug_to_gap = {
+        "comm": comm_gap,
+        "prod": prod_gap,
+        "sales": sales_gap,
+        "cs": cs_gap,
+    }
+
+    # Resolve active required competency slugs if task specifies them
+    active_req_slugs = None
+    if "required_competencies" in d and d["required_competencies"] is not None:
+        active_req_slugs = [str(s).lower() for s in d["required_competencies"] if str(s).lower() in slug_to_gap]
+    elif "required_topic_ids" in d and d["required_topic_ids"] is not None:
+        active_req_slugs = [topic_id_to_slug[int(tid)] for tid in d["required_topic_ids"] if int(tid) in topic_id_to_slug]
+
     # Relational aggregates
     if "min_skill_margin" in d and d["min_skill_margin"] is not None:
         min_skill_margin = _strict_float(d["min_skill_margin"], "min_skill_margin")
+    elif active_req_slugs:
+        # Task-specific minimum margin: ONLY required competencies
+        req_margins = [slug_to_gap[s] for s in active_req_slugs if s in slug_to_gap]
+        if d.get("include_overall_assessment_in_min_margin", False):
+            req_margins.append(assess_gap)
+        min_skill_margin = float(min(req_margins)) if req_margins else assess_gap
     else:
+        # Full backward compatibility mode (all 4 subskills)
         min_skill_margin = float(
             min(comm_gap, prod_gap, sales_gap, cs_gap, assess_gap)
         )
 
     if "weighted_skill_margin" in d and d["weighted_skill_margin"] is not None:
         weighted_skill_margin = _strict_float(d["weighted_skill_margin"], "weighted_skill_margin")
+    elif active_req_slugs:
+        # Normalized category weights over ONLY required competencies
+        w = resolve_domain_weights(task_category, required_competencies=active_req_slugs)
+        weighted_skill_margin = float(
+            round(
+                sum(w[s] * slug_to_gap[s] for s in active_req_slugs if s in slug_to_gap),
+                4,
+            )
+        )
     else:
         w = resolve_domain_weights(task_category)
         weighted_skill_margin = float(
@@ -382,6 +489,14 @@ def build_complete_stage2_feature_dict(raw_input: dict[str, Any]) -> dict[str, f
         weakest_link_deficit = _strict_float(d["weakest_link_deficit"], "weakest_link_deficit")
     else:
         weakest_link_deficit = float(min(0.0, min_skill_margin))
+
+    # Distinct competency weakness indicators (Phase 3 Requirement 6)
+    if active_req_slugs:
+        deficit_count = float(sum(1 for s in active_req_slugs if s in slug_to_gap and slug_to_gap[s] < 0.0))
+        deficit_ratio = float(deficit_count / len(active_req_slugs)) if active_req_slugs else 0.0
+    else:
+        deficit_count = float(sum(1 for g in [comm_gap, prod_gap, sales_gap, cs_gap] if g < 0.0))
+        deficit_ratio = float(deficit_count / 4.0)
 
     if "exp_surplus_tanh" in d and d["exp_surplus_tanh"] is not None:
         exp_surplus_tanh = _strict_float(d["exp_surplus_tanh"], "exp_surplus_tanh")
@@ -404,6 +519,9 @@ def build_complete_stage2_feature_dict(raw_input: dict[str, Any]) -> dict[str, f
         "weakest_link_deficit": weakest_link_deficit,
         "exp_surplus_tanh": exp_surplus_tanh,
         "difficulty_tier": difficulty_tier,
+        # Distinct competency weakness metrics (Phase 3 & 4)
+        "deficit_competencies_count": deficit_count,
+        "deficit_competencies_ratio": deficit_ratio,
         # Auxiliary indicator retained for explanation / backward compatibility
         "cert_satisfied": cert_satisfied,
         # Legacy 28 features (for full backward compatibility)
@@ -437,10 +555,13 @@ def build_complete_stage2_feature_dict(raw_input: dict[str, Any]) -> dict[str, f
     }
 
 
-def explain_stage2_prediction(feature_dict: dict[str, float]) -> list[dict[str, Any]]:
+def explain_stage2_prediction(
+    feature_dict: dict[str, float],
+    active_features: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """
     Generate human-readable, domain-grounded contributing factors for the Admin UI
-    corresponding to the exact 5 Stage 2 v2 features (`STAGE2_V2_FEATURES`).
+    corresponding to the exact features of the active Stage 2 model schema.
     """
     factors: list[dict[str, Any]] = []
 
@@ -521,29 +642,76 @@ def explain_stage2_prediction(feature_dict: dict[str, float]) -> list[dict[str, 
             }
         )
 
-    # 3. weakest_link_deficit
-    if wl_deficit < 0.0:
-        factors.append(
-            {
-                "feature": "weakest_link_deficit",
-                "label": "Weakest-Link Deficit",
-                "value": round(wl_deficit, 2),
-                "unit": "pts",
-                "direction": "negative",
-                "summary": f"Bottleneck penalty active ({wl_deficit:.1f} pts deficit on weakest domain)",
-            }
-        )
+    # 3. Deficit representation: Determine whether to include weakest_link_deficit (v2) or deficit_competencies_ratio (v3)
+    include_wl = False
+    include_ratio = False
+    if active_features is not None:
+        include_wl = "weakest_link_deficit" in active_features
+        include_ratio = "deficit_competencies_ratio" in active_features
+    elif "deficit_competencies_ratio" in feature_dict and "weakest_link_deficit" not in feature_dict:
+        include_ratio = True
     else:
-        factors.append(
-            {
-                "feature": "weakest_link_deficit",
-                "label": "Weakest-Link Deficit",
-                "value": 0.0,
-                "unit": "pts",
-                "direction": "positive",
-                "summary": "Zero bottleneck deficit (0.0 pts; all domains meet baseline)",
-            }
-        )
+        include_wl = "weakest_link_deficit" in feature_dict
+
+    if include_wl:
+        if wl_deficit < 0.0:
+            factors.append(
+                {
+                    "feature": "weakest_link_deficit",
+                    "label": "Weakest-Link Deficit",
+                    "value": round(wl_deficit, 2),
+                    "unit": "pts",
+                    "direction": "negative",
+                    "summary": f"Bottleneck penalty active ({wl_deficit:.1f} pts deficit on weakest domain)",
+                }
+            )
+        else:
+            factors.append(
+                {
+                    "feature": "weakest_link_deficit",
+                    "label": "Weakest-Link Deficit",
+                    "value": 0.0,
+                    "unit": "pts",
+                    "direction": "positive",
+                    "summary": "Zero bottleneck deficit (0.0 pts; all domains meet baseline)",
+                }
+            )
+
+    if include_ratio and "deficit_competencies_ratio" in feature_dict:
+        def_ratio = float(feature_dict.get("deficit_competencies_ratio", 0.0))
+        if def_ratio == 0.0:
+            factors.append(
+                {
+                    "feature": "deficit_competencies_ratio",
+                    "label": "Competency Deficit Ratio",
+                    "value": 0.0,
+                    "unit": "ratio",
+                    "direction": "positive",
+                    "summary": "Full competency coverage (0.0 ratio; all required assessment topics meet pass mark)",
+                }
+            )
+        elif def_ratio <= 0.34:
+            factors.append(
+                {
+                    "feature": "deficit_competencies_ratio",
+                    "label": "Competency Deficit Ratio",
+                    "value": round(def_ratio, 2),
+                    "unit": "ratio",
+                    "direction": "neutral",
+                    "summary": f"Minor breadth deficit ({def_ratio*100:.0f}% of required competency topics below threshold)",
+                }
+            )
+        else:
+            factors.append(
+                {
+                    "feature": "deficit_competencies_ratio",
+                    "label": "Competency Deficit Ratio",
+                    "value": round(def_ratio, 2),
+                    "unit": "ratio",
+                    "direction": "negative",
+                    "summary": f"Multi-skill deficit breadth ({def_ratio*100:.0f}% of required competency topics below threshold)",
+                }
+            )
 
     # 4. exp_surplus_tanh
     if exp_tanh >= 0.50:

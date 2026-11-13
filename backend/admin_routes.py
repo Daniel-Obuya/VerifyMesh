@@ -25,6 +25,12 @@ from backend.db import (
     review_agent_certification,
     review_agent_experience,
     get_agent_profile_data,
+    admin_override_assessment_attempt,
+    get_agent_assessment_history,
+    get_assessment_topics_list,
+    admin_create_assessment_topic,
+    admin_update_assessment_topic,
+    admin_get_topic_questions,
 )
 
 logger = logging.getLogger("verifymesh.admin")
@@ -73,7 +79,7 @@ def get_authenticated_admin():
         )
 
     canonical_role = normalize_role(user.get("role", ""))
-    if canonical_role not in ("Administrator", "ADMIN", "Workforce Officer", "WORKFORCE_OFFICER"):
+    if canonical_role not in ("Administrator", "ADMIN", "Workforce Officer", "WORKFORCE_OFFICER", "Platform Administrator", "PLATFORM_ADMIN"):
         return None, None, (
             jsonify({"success": False, "error": "Workforce Officer or Administrator role required."}), 403
         )
@@ -101,9 +107,9 @@ def admin_overview():
         from src.task_suitability_inference import task_suitability_engine
         model_info = task_suitability_engine.get_info()
         metrics["runtime_model"] = {
-            "model_file": model_info.get("model_file", "verifymesh_stage2_suitability_pipeline_v2.joblib"),
-            "model_name": model_info.get("model_name", "VerifyMesh_Stage2_Suitability_LR_v2"),
-            "model_version": model_info.get("model_version", "2.0.0"),
+            "model_file": model_info.get("model_file", "verifymesh_stage2_suitability_pipeline_v3.joblib"),
+            "model_name": model_info.get("model_name", "VerifyMesh_Stage2_Suitability_LR_v3"),
+            "model_version": model_info.get("model_version", "3.0.0"),
             "model_path": model_info.get("model_path"),
             "model_sha256": model_info.get("model_sha256"),
             "model_loaded": model_info.get("model_loaded", True),
@@ -361,7 +367,9 @@ def admin_assign_task_application(application_id):
         return err
 
     try:
-        res = assign_task_application(application_id, admin_user_id=user_id)
+        body = request.get_json(silent=True) or {}
+        override_reason = body.get("override_reason")
+        res = assign_task_application(application_id, admin_user_id=user_id, override_reason=override_reason)
         return jsonify({
             "success": True,
             "message": "Task successfully assigned to applicant.",
@@ -421,6 +429,88 @@ def admin_assessments():
         }), 200
     except Exception as e:
         logger.error(f"Error in admin assessments: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@admin_bp.route("/assessments/topics", methods=["GET"])
+def admin_get_topics():
+    """Retrieve all assessment topics with full metadata, version, and attempt limits."""
+    _user_id, _role, err = get_authenticated_admin()
+    if err:
+        return err
+
+    try:
+        topics = get_assessment_topics_list()
+        return jsonify({
+            "success": True,
+            "data": topics,
+            "count": len(topics)
+        }), 200
+    except Exception as e:
+        logger.error(f"Error fetching admin topics: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@admin_bp.route("/assessments/topics", methods=["POST"])
+def admin_create_topic():
+    """Workforce Officer: Create a new assessment topic with audit logging."""
+    admin_user_id, _role, err = get_authenticated_admin()
+    if err:
+        return err
+
+    payload = request.get_json(silent=True) or {}
+    if not payload.get("topic_name"):
+        return jsonify({"success": False, "error": "topic_name is required."}), 400
+
+    try:
+        topic_id = admin_create_assessment_topic(admin_user_id, payload)
+        return jsonify({
+            "success": True,
+            "message": "Assessment topic created successfully.",
+            "data": {"topic_id": topic_id, "version": 1}
+        }), 201
+    except Exception as e:
+        logger.error(f"Error creating topic: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@admin_bp.route("/assessments/topics/<int:topic_id>", methods=["PUT"])
+def admin_update_topic(topic_id):
+    """Workforce Officer: Update assessment topic configuration and increment version."""
+    admin_user_id, _role, err = get_authenticated_admin()
+    if err:
+        return err
+
+    payload = request.get_json(silent=True) or {}
+    try:
+        success, msg = admin_update_assessment_topic(admin_user_id, topic_id, payload)
+        if not success:
+            return jsonify({"success": False, "error": msg}), 400
+        return jsonify({
+            "success": True,
+            "message": "Assessment topic updated and version incremented."
+        }), 200
+    except Exception as e:
+        logger.error(f"Error updating topic {topic_id}: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@admin_bp.route("/assessments/topics/<int:topic_id>/questions", methods=["GET"])
+def admin_view_topic_questions(topic_id):
+    """Admin-only: View questions for a topic including correct_answer and points."""
+    _admin_user_id, _role, err = get_authenticated_admin()
+    if err:
+        return err
+
+    try:
+        questions = admin_get_topic_questions(topic_id)
+        return jsonify({
+            "success": True,
+            "data": questions,
+            "count": len(questions)
+        }), 200
+    except Exception as e:
+        logger.error(f"Error viewing topic questions: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -565,4 +655,73 @@ def admin_review_experience(exp_id):
     except Exception as e:
         logger.error(f"Error reviewing experience {exp_id}: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@admin_bp.route("/agents/<int:agent_id>/assessment-override", methods=["POST"])
+def admin_override_agent_assessment(agent_id):
+    """
+    Workforce Officer administrative exception process.
+    Actions:
+      - 'GRANT_EXTRA_ATTEMPT': Grants +1 attempt quota.
+      - 'REOPEN_ATTEMPT': Reopens an expired attempt for 30 minutes.
+      - 'CANCEL_ATTEMPT': Marks an attempt CANCELLED so it is exempt from quota.
+    """
+    admin_user_id, _role, err = get_authenticated_admin()
+    if err:
+        return err
+
+    payload = request.get_json(silent=True) or {}
+    topic_id = payload.get("topic_id")
+    action = payload.get("action")
+    reason = payload.get("reason")
+    attempt_id = payload.get("attempt_id")
+
+    if not action or not reason:
+        return jsonify({"success": False, "error": "Action and mandatory reason are required."}), 400
+
+    try:
+        success, msg = admin_override_assessment_attempt(
+            admin_user_id=admin_user_id,
+            agent_id=agent_id,
+            topic_id=topic_id,
+            action=action,
+            reason=reason,
+            attempt_id=attempt_id
+        )
+        if not success:
+            return jsonify({"success": False, "error": msg}), 400
+
+        return jsonify({
+            "success": True,
+            "message": msg,
+            "data": {
+                "agent_id": agent_id,
+                "topic_id": topic_id,
+                "action": action,
+                "reason": reason
+            }
+        }), 200
+    except Exception as e:
+        logger.error(f"Error granting assessment override: {e}")
+        return jsonify({"success": False, "error": f"Failed to apply override: {str(e)}"}), 500
+
+
+@admin_bp.route("/agents/<int:agent_id>/assessment-history", methods=["GET"])
+def admin_get_agent_assessment_history(agent_id):
+    """Fetch complete assessment attempt history for an agent."""
+    _admin_user_id, _role, err = get_authenticated_admin()
+    if err:
+        return err
+
+    topic_id = request.args.get("topic_id")
+    try:
+        history = get_agent_assessment_history(agent_id, topic_id=int(topic_id) if topic_id else None)
+        return jsonify({
+            "success": True,
+            "data": history
+        }), 200
+    except Exception as e:
+        logger.error(f"Error fetching assessment history: {e}")
+        return jsonify({"success": False, "error": f"Failed to fetch assessment history: {str(e)}"}), 500
+
 

@@ -315,8 +315,17 @@ def login():
             return jsonify({"success": False, "error": error}), 503
         return jsonify({"success": False, "error": error}), 401
 
-    # Successful login: reset failed login attempts
+    # Successful login: reset failed login attempts and update last_login_at
     limiter.reset(rate_key)
+    try:
+        conn = get_mysql_connection()
+        if conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE users SET last_login_at = NOW() WHERE user_id = %s", (user["id"],))
+            conn.commit()
+            conn.close()
+    except Exception:
+        pass
 
     token = generate_auth_token(user["id"], user["role"], remember_me=remember_me)
 
@@ -362,7 +371,11 @@ def get_current_user():
             "assessment": user.get("assessment", None),
             "competency_level": user.get("competency_level", None),
             "confidence": user.get("confidence", None),
-            "dashboardUrl": "/workforce/dashboard" if canonical_role in ("Administrator", "Workforce Officer", "ADMIN", "WORKFORCE_OFFICER") else "/dashboard"
+            "dashboardUrl": (
+                "/platform-admin/dashboard" if canonical_role in ("Platform Administrator", "PLATFORM_ADMIN")
+                else "/workforce/dashboard" if canonical_role in ("Administrator", "Workforce Officer", "ADMIN", "WORKFORCE_OFFICER")
+                else "/dashboard"
+            )
         }
     }), 200
 

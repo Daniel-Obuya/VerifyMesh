@@ -149,20 +149,20 @@ export const TakeAssessmentModal = ({
         return { 
           topic: 'Diagnostic Troubleshooting', 
           desc: 'Systematic root-cause diagnosis & issue reproduction',
-          badge: 'bg-blue-50 text-blue-700 border-blue-200' 
+          badge: 'bg-blue-950/60 text-blue-300 border-blue-500/40' 
         };
       }
       if (questionOrder === 3 || questionOrder === 4) {
         return { 
           topic: 'Customer De-escalation & Communication', 
           desc: 'Active listening, empathy, and professional de-escalation',
-          badge: 'bg-purple-50 text-purple-700 border-purple-200' 
+          badge: 'bg-purple-950/60 text-purple-300 border-purple-500/40' 
         };
       }
       return { 
         topic: 'Ticket Priority & SLA Triage', 
         desc: 'Impact assessment and time-sensitive resolution routing',
-        badge: 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+        badge: 'bg-emerald-950/60 text-emerald-300 border-emerald-500/40' 
       };
     }
     // Exam 1: Sales Competency
@@ -170,34 +170,34 @@ export const TakeAssessmentModal = ({
       return { 
         topic: 'Product Knowledge & Discovery', 
         desc: 'Consultative questioning and alignment with client operational needs',
-        badge: 'bg-indigo-50 text-indigo-700 border-indigo-200' 
+        badge: 'bg-indigo-950/60 text-indigo-300 border-indigo-500/40' 
       };
     }
     if (questionOrder === 2) {
       return { 
         topic: 'Sales Techniques & Objection Handling', 
         desc: 'Value-oriented responses addressing automated verification benefits',
-        badge: 'bg-blue-50 text-blue-700 border-blue-200' 
+        badge: 'bg-blue-950/60 text-blue-300 border-blue-500/40' 
       };
     }
     if (questionOrder === 3) {
       return { 
         topic: 'Objection Handling & Implementation', 
         desc: 'Structured responses addressing rollout complexity and risk reduction',
-        badge: 'bg-amber-50 text-amber-700 border-amber-200' 
+        badge: 'bg-amber-950/60 text-amber-300 border-amber-500/40' 
       };
     }
     if (questionOrder === 4) {
       return { 
         topic: 'Product Knowledge & ROI Demonstration', 
         desc: 'Quantitative proof and measurable business impact for decision makers',
-        badge: 'bg-purple-50 text-purple-700 border-purple-200' 
+        badge: 'bg-purple-950/60 text-purple-300 border-purple-500/40' 
       };
     }
     return { 
       topic: 'Customer Relationship Management & Follow-up', 
       desc: 'Professional post-discovery follow-up, clarity, and account momentum',
-      badge: 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+      badge: 'bg-emerald-950/60 text-emerald-300 border-emerald-500/40' 
     };
   };
 

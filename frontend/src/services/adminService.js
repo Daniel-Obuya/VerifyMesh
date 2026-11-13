@@ -175,8 +175,8 @@ export const adminService = {
    * @param {number|string} applicationId
    * @returns {Promise<Object>}
    */
-  async assignTaskApplication(applicationId) {
-    return api.post(`/admin/applications/${applicationId}/assign`);
+  async assignTaskApplication(applicationId, data = {}) {
+    return api.post(`/admin/applications/${applicationId}/assign`, data);
   },
 
   /**
@@ -191,5 +191,26 @@ export const adminService = {
       status,
       notes,
     });
+  },
+
+  /**
+   * Apply administrative exception/override to an agent's assessment attempt or topic limit
+   * @param {number|string} agentId
+   * @param {Object} data { topic_id, action, reason, attempt_id }
+   * @returns {Promise<Object>}
+   */
+  async overrideAssessmentAttempt(agentId, data) {
+    return api.post(`/admin/agents/${agentId}/assessment-override`, data);
+  },
+
+  /**
+   * Fetch complete assessment attempt history for an agent
+   * @param {number|string} agentId
+   * @param {number|string} [topicId]
+   * @returns {Promise<Object>}
+   */
+  async getAgentAssessmentHistory(agentId, topicId = null) {
+    const params = topicId ? `?topic_id=${topicId}` : '';
+    return api.get(`/admin/agents/${agentId}/assessment-history${params}`);
   },
 };

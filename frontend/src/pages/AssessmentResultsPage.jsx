@@ -359,7 +359,7 @@ export const AssessmentResultsPage = () => {
 
             <div className="pt-2 border-t border-[#1b2542]">
               <p className="text-[11px] text-slate-400 leading-snug">
-                Inference loaded from trained model artifact across candidate competency interactions.
+                Verified competency rating evaluated against standardized performance criteria.
               </p>
             </div>
           </div>

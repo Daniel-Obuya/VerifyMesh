@@ -10,6 +10,7 @@ from backend.config import Config
 from backend.auth_routes import auth_bp
 from backend.competency_routes import competency_bp
 from backend.admin_routes import admin_bp
+from backend.platform_admin_routes import platform_admin_bp
 from backend.db import check_mysql_status
 
 
@@ -35,6 +36,7 @@ def create_app(config_class=Config):
     app.register_blueprint(auth_bp)
     app.register_blueprint(competency_bp)
     app.register_blueprint(admin_bp)
+    app.register_blueprint(platform_admin_bp)
 
     @app.route('/api/health', methods=['GET'])
     def health_check():
@@ -51,12 +53,12 @@ def create_app(config_class=Config):
                 "mode": "MySQL Database" if mysql_ready else "Unavailable"
             },
             "machine_learning": {
-                "source": "VerifyMesh Phase 3/4 ML Pipeline",
+                "source": "VerifyMesh Stage 2 Task Suitability Predictor v3",
                 "role": model_info.get("role", "Task-Specific Suitability Prediction"),
                 "eligibility_engine": model_info.get("eligibility_engine", "Deterministic Server-Side Rules"),
-                "active_model": model_info.get("model_file", "verifymesh_stage2_suitability_pipeline_v2.joblib"),
-                "model_name": model_info.get("model_name"),
-                "model_version": model_info.get("model_version"),
+                "active_model": model_info.get("model_file", "verifymesh_stage2_suitability_pipeline_v3.joblib"),
+                "model_name": model_info.get("model_name", "VerifyMesh_Stage2_Suitability_LR_v3"),
+                "model_version": model_info.get("model_version", "3.0.0"),
                 "model_sha256": model_info.get("model_sha256"),
                 "features_count": model_info.get("features_count", 5),
                 "decision_threshold": model_info.get("decision_threshold", 0.60),

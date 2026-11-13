@@ -41,10 +41,12 @@ export const AuthCard = () => {
       const res = await loginWithGoogle(credentialResponse.credential);
       if (res?.user?.dashboardUrl) {
         navigate(res.user.dashboardUrl);
-      } else if (res?.user?.role === 'Administrator') {
-        navigate('/admin/dashboard');
+      } else if (res?.user?.role === 'Platform Administrator' || res?.user?.role === 'PLATFORM_ADMIN') {
+        navigate('/platform-admin/dashboard');
+      } else if (['Workforce Officer', 'WORKFORCE_OFFICER', 'Administrator', 'ADMIN'].includes(res?.user?.role)) {
+        navigate('/workforce/dashboard');
       } else {
-        navigate('/agent/dashboard');
+        navigate('/dashboard');
       }
     } catch (err) {
       setAuthError(err.message || 'Google authentication failed.');
@@ -81,10 +83,12 @@ export const AuthCard = () => {
 
       if (response?.user?.dashboardUrl) {
         navigate(response.user.dashboardUrl);
-      } else if (response?.user?.role === 'Administrator') {
-        navigate('/admin/dashboard');
+      } else if (response?.user?.role === 'Platform Administrator' || response?.user?.role === 'PLATFORM_ADMIN') {
+        navigate('/platform-admin/dashboard');
+      } else if (['Workforce Officer', 'WORKFORCE_OFFICER', 'Administrator', 'ADMIN'].includes(response?.user?.role)) {
+        navigate('/workforce/dashboard');
       } else {
-        navigate('/agent/dashboard');
+        navigate('/dashboard');
       }
     } catch (err) {
       setAuthError(err.message || 'Invalid email or password. Please try again.');

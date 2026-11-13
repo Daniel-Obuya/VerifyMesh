@@ -17,7 +17,6 @@ import {
   CheckCircle2, 
   Briefcase, 
   Clock, 
-  RotateCcw, 
   AlertCircle, 
   X,
   RefreshCw,
@@ -62,6 +61,13 @@ export const AgentDashboard = () => {
     }
   });
 
+  // Helper: check if a task genuinely needs assessment (hard-prerequisites MUST be satisfied first)
+  const isAssessmentGenuinelyNeeded = (t) => {
+    const certMet = t.prerequisites?.certification_met !== false;
+    const expMet = t.prerequisites?.experience_met !== false;
+    return certMet && expMet && (t.state === 'Assessment Needed' || !t.prerequisites?.assessment_met);
+  };
+
   const openAssessmentForTask = (task = null) => {
     if (task && (task.task_id || task.id)) {
       const tId = task.task_id || task.id;
@@ -70,7 +76,7 @@ export const AgentDashboard = () => {
       const queryStr = targetTopic ? `?topicId=${targetTopic.topic_id}` : '';
       navigate(`/agent/assessment/${tId}${queryStr}`);
     } else {
-      const taskNeedingExam = tasks.find(t => t.state === 'Assessment Needed' || !t.prerequisites?.assessment_met);
+      const taskNeedingExam = tasks.find(t => isAssessmentGenuinelyNeeded(t));
       if (taskNeedingExam) {
         const tId = taskNeedingExam.task_id || taskNeedingExam.id;
         const unpassed = taskNeedingExam.required_topics?.find(rt => rt.status !== 'Passed');
@@ -263,19 +269,6 @@ export const AgentDashboard = () => {
     }
   };
 
-  // Reset to Unassessed (Demo & Testing Feature)
-  const handleResetAssessment = async () => {
-    try {
-      await competencyService.resetAssessment();
-      setIsUserMenuOpen(false);
-      setToastMessage('Agent reset to unassessed state. Tasks now reflect prerequisite requirements.');
-      setTimeout(() => setToastMessage(null), 5000);
-      await fetchDashboardData();
-    } catch (err) {
-      console.error('Error resetting assessment:', err);
-    }
-  };
-
   // Callback on successful task application submission
   const handleApplySuccess = async (taskId, newStatus) => {
     setToastMessage(`Application successfully submitted! Status: ${newStatus}`);
@@ -405,7 +398,7 @@ export const AgentDashboard = () => {
 
   // Work Overview metrics computed strictly from authoritative backend tasks
   const availableCount = tasks.filter(t => t.can_apply === true || t.state === 'Ready to Apply').length;
-  const assessmentNeededCount = tasks.filter(t => t.state === 'Assessment Needed' || !t.prerequisites?.assessment_met).length;
+  const assessmentNeededCount = tasks.filter(t => isAssessmentGenuinelyNeeded(t)).length;
   const underReviewCount = tasks.filter(t => ['Application Submitted', 'Under Review'].includes(t.application_status) || t.state === 'Under Review').length;
   const acceptedCount = tasks.filter(t => ['Assigned', 'Accepted'].includes(t.application_status) || t.state === 'Assigned').length;
   const qualifiedCount = tasks.filter(t => 
@@ -418,7 +411,7 @@ export const AgentDashboard = () => {
   // Filter tasks based on selected tab
   const filteredTasks = tasks.filter(t => {
     if (taskFilter === 'eligible') return t.can_apply === true || t.state === 'Ready to Apply';
-    if (taskFilter === 'assessment_needed') return t.state === 'Assessment Needed' || !t.prerequisites?.assessment_met;
+    if (taskFilter === 'assessment_needed') return isAssessmentGenuinelyNeeded(t);
     return true;
   });
 
@@ -546,17 +539,6 @@ export const AgentDashboard = () => {
                 >
                   <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
                   {hasCompletedAssessment ? 'Retake Assessment' : 'Complete Assessment'}
-                </button>
-
-                {/* Reset Toggle for Demo & Verification */}
-                <button
-                  type="button"
-                  onClick={handleResetAssessment}
-                  className="w-full text-left px-3.5 py-2.5 font-medium text-amber-400 hover:bg-amber-950/40 flex items-center gap-2 cursor-pointer"
-                  title="Toggle back to unassessed view"
-                >
-                  <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
-                  Reset to Unassessed (Demo)
                 </button>
 
                 <button
@@ -1278,9 +1260,9 @@ export const AgentDashboard = () => {
                         {/* Requirements Grid */}
                         <div className="grid grid-cols-2 gap-2.5 mt-3.5 pt-3 border-t border-[#1b2542]">
                           <div>
-                            <span className="text-[10px] text-slate-400 font-medium block uppercase tracking-wider">Required competency</span>
+                            <span className="text-[10px] text-slate-400 font-medium block uppercase tracking-wider">Min. Experience</span>
                             <p className="text-xs font-semibold text-white mt-0.5">
-                              {task.requiredCompetency || task.required_competency || 'Eligible'}
+                              {task.minimum_experience_months ? `${task.minimum_experience_months} Months` : 'None required'}
                             </p>
                           </div>
                           <div>

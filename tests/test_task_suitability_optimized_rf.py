@@ -8,6 +8,7 @@ from src.stage2_feature_engineering import STAGE2_V2_FEATURES, LEGACY_28_FEATURE
 from src.task_suitability_inference import (
     TaskSuitabilityInference,
     task_suitability_engine,
+    v2_suitability_engine,
     legacy_rf_suitability_engine,
 )
 from backend.db import build_task_suitability_features, get_task_applicants, get_mysql_connection
@@ -16,7 +17,7 @@ from backend.db import build_task_suitability_features, get_task_applicants, get
 class TestTaskSuitabilityOptimizedRF(unittest.TestCase):
     """
     Test Suite for Stage 2 Task-Specific Suitability Prediction Pipeline & Two-Stage Architecture:
-    1. Active pipeline and metadata integrity (verifymesh_stage2_suitability_pipeline_v2.joblib, tau = 0.60).
+    1. Historical v2 pipeline and metadata integrity (verifymesh_stage2_suitability_pipeline_v2.joblib, tau = 0.60).
     2. Exact 5-feature input contract (STAGE2_V2_FEATURES) & 28-feature legacy compatibility.
     3. Strict decision threshold boundary testing (tau = 0.60) & 3-tier advisory classification.
     4. Deterministic Stage 1 gatekeeper prerequisite enforcement.
@@ -25,7 +26,7 @@ class TestTaskSuitabilityOptimizedRF(unittest.TestCase):
     """
 
     def setUp(self):
-        self.engine = task_suitability_engine
+        self.engine = v2_suitability_engine
         self.expected_features = list(STAGE2_V2_FEATURES)
         self.legacy_features = list(LEGACY_28_FEATURES)
 

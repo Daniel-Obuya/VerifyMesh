@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import os
 import json
 import math
@@ -11,6 +12,8 @@ import numpy as np
 from src.stage2_feature_engineering import (
     STAGE2_V2_FEATURES,
     STAGE2_V2_FEATURE_DESCRIPTIONS,
+    STAGE2_V3_FEATURES,
+    STAGE2_V3_FEATURE_DESCRIPTIONS,
     LEGACY_28_FEATURES,
     build_complete_stage2_feature_dict,
     explain_stage2_prediction,
@@ -51,11 +54,12 @@ class TaskSuitabilityInference:
        and model version/SHA-256 traceability in all outputs.
     """
 
-    FEATURE_NAMES = list(STAGE2_V2_FEATURES)
+    FEATURE_NAMES = list(STAGE2_V3_FEATURES)
+    FEATURE_DESCRIPTIONS = dict(STAGE2_V3_FEATURE_DESCRIPTIONS)
     LEGACY_FEATURE_NAMES = list(LEGACY_28_FEATURES)
 
-    DEFAULT_MODEL_FILENAME = "verifymesh_stage2_suitability_pipeline_v2.joblib"
-    DEFAULT_METADATA_FILENAME = "verifymesh_stage2_metadata_v2.json"
+    DEFAULT_MODEL_FILENAME = "verifymesh_stage2_suitability_pipeline_v3.joblib"
+    DEFAULT_METADATA_FILENAME = "verifymesh_stage2_metadata_v3.json"
     DEFAULT_THRESHOLD = 0.60
     DEFAULT_MODERATE_THRESHOLD = 0.48
 
@@ -201,16 +205,16 @@ class TaskSuitabilityInference:
         """Returns structured model provenance and traceability metadata for auditing."""
         model_name = self.metadata.get(
             "model_name",
-            "VerifyMesh_Legacy_RF_v1" if self.is_legacy_rf else "VerifyMesh_Stage2_Suitability_LR_v2",
+            "VerifyMesh_Legacy_RF_v1" if self.is_legacy_rf else "VerifyMesh_Stage2_Suitability_LR_v3",
         )
         model_version = self.metadata.get(
             "model_version",
-            "2.1.0-optimized-rf" if self.is_legacy_rf else "2.0.0",
+            "2.1.0-optimized-rf" if self.is_legacy_rf else "3.0.0",
         )
         algorithm = (
             "ColumnTransformer + RandomForestClassifier (Legacy 28-Feature)"
             if self.is_legacy_rf
-            else "StandardScaler + LogisticRegression (L2, C=0.5, 5-Feature Weakest-Link)"
+            else "StandardScaler + LogisticRegression (L2, C=0.5, 5-Feature Hardened Non-Collinear)"
         )
         return {
             "model_name": model_name,
@@ -229,7 +233,7 @@ class TaskSuitabilityInference:
             },
             "training_scenario": self.metadata.get("training_dataset", {}).get(
                 "simulation_scenario",
-                "scenario_b (Strict Bottleneck / Weakest-Link, N=4,675 eligible pairs)",
+                "scenario_b (Strict Bottleneck / Weakest-Link, Rebuilt without Feature Redundancy)",
             ),
             "is_advisory": True,
             "stage1_authority": "Stage 1 Deterministic Eligibility Engine is mandatory and authoritative.",
@@ -255,7 +259,7 @@ class TaskSuitabilityInference:
             "feature_count": len(self.required_features),
             "expected_features": list(self.required_features),
             "feature_descriptions": (
-                STAGE2_V2_FEATURE_DESCRIPTIONS if not self.is_legacy_rf else {}
+                STAGE2_V3_FEATURE_DESCRIPTIONS if not self.is_legacy_rf else {}
             ),
             "decision_threshold": self.threshold,
             "moderate_threshold": self.moderate_threshold,
@@ -371,25 +375,41 @@ class TaskSuitabilityInference:
         # Build human-readable factor explanations using complete feature context
         try:
             full_for_explanation = build_complete_stage2_feature_dict({**complete_context, **row})
-            contributing_factors = explain_stage2_prediction(full_for_explanation)
+            contributing_factors = explain_stage2_prediction(full_for_explanation, active_features=self.required_features)
         except Exception:
             contributing_factors = []
 
         traceability = self.get_traceability_metadata()
 
+        # Provide both exact active model feature_values and backward-compatible engineered_features
+        all_engineered = {**row}
+        if "weakest_link_deficit" in complete_context:
+            all_engineered["weakest_link_deficit"] = float(complete_context["weakest_link_deficit"])
+        elif "min_skill_margin" in row:
+            all_engineered["weakest_link_deficit"] = float(min(0.0, row["min_skill_margin"]))
+
         return {
+            "applicant_id": complete_context.get("applicant_id") or feature_data.get("applicant_id"),
+            "task_id": complete_context.get("task_id") or feature_data.get("task_id"),
             "suitability_score": round(p_suitable, 4),
             "suitability_percent": round(p_suitable * 100.0, 1),
+            "prediction_score": round(p_suitable, 4),
             "p_suitable": round(p_suitable, 4),
             "p_not_suitable": round(p_not_suitable, 4),
             "predicted_class": predicted_class,
             "suitability_label": suitability_label,
             "advisory_tier": advisory_tier,
             "advisory_tier_code": advisory_tier_code,
+            "advisory_classification": advisory_tier,
             "applied_threshold": self.threshold,
             "moderate_threshold": self.moderate_threshold,
-            "engineered_features": {k: round(v, 4) for k, v in row.items()},
+            "advisory_threshold": self.threshold,
+            "feature_values": {k: round(v, 4) for k, v in row.items()},
+            "engineered_features": {k: round(v, 4) for k, v in all_engineered.items()},
             "contributing_factors": contributing_factors,
+            "assessment_completeness_status": complete_context.get("assessment_completeness_status", "complete"),
+            "competency_breakdown": complete_context.get("competency_breakdown") or complete_context.get("topic_evaluations", []),
+            "prediction_timestamp": datetime.now(timezone.utc).isoformat(),
             "model_traceability": traceability,
             "model_name": traceability["model_name"],
             "model_version": traceability["model_version"],
@@ -414,10 +434,16 @@ class TaskSuitabilityInference:
         }
 
 
-# Global singleton instance exported for application routes and db queries (Stage 2 v2 5-Feature LR)
+# Global singleton instance exported for application routes and db queries (Stage 2 v3 5-Feature LR)
 task_suitability_engine = TaskSuitabilityInference()
 
-# Preserved legacy singleton for historical audit / backward-compatibility testing
+# Preserved predecessor singleton for historical audit / backward-compatibility testing (Stage 2 v2)
+v2_suitability_engine = TaskSuitabilityInference(
+    model_filename="verifymesh_stage2_suitability_pipeline_v2.joblib",
+    metadata_filename="verifymesh_stage2_metadata_v2.json",
+)
+
+# Preserved legacy singleton for historical audit / backward-compatibility testing (Legacy RF)
 legacy_rf_suitability_engine = TaskSuitabilityInference(
     model_filename="verifymesh_final_optimized_pipeline.joblib",
     metadata_filename="verifymesh_threshold_metadata.json",

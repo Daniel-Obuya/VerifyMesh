@@ -6,17 +6,25 @@ import { RegisterPage } from './pages/RegisterPage';
 import { AgentDashboard } from './pages/AgentDashboard';
 import { ProfilePage } from './pages/ProfilePage';
 import { AdminDashboard } from './pages/AdminDashboard';
+import { PlatformAdminDashboard } from './pages/PlatformAdminDashboard';
 import { CreateTaskPage } from './pages/CreateTaskPage';
 import { AssessmentPage } from './pages/AssessmentPage';
 import { AssessmentResultsPage } from './pages/AssessmentResultsPage';
 import { SupervisorVerifyPage } from './pages/SupervisorVerifyPage';
 
+// Helper to check whether user has platform administrator role
+const isPlatformAdminRole = (userRole) =>
+  ['Platform Administrator', 'PLATFORM_ADMIN', 'Administrator', 'ADMIN'].includes(userRole);
+
 // Helper to check whether user has a workforce officer / operational admin role
 const isWorkforceRole = (userRole) => 
   ['Workforce Officer', 'WORKFORCE_OFFICER', 'Administrator', 'ADMIN'].includes(userRole);
 
-const getRoleDashboard = (userRole) =>
-  isWorkforceRole(userRole) ? '/workforce/dashboard' : '/dashboard';
+const getRoleDashboard = (userRole) => {
+  if (['Platform Administrator', 'PLATFORM_ADMIN'].includes(userRole)) return '/platform-admin/dashboard';
+  if (isWorkforceRole(userRole)) return '/workforce/dashboard';
+  return '/dashboard';
+};
 
 // Protected Route wrapper that redirects unauthenticated users
 const ProtectedRoute = ({ children, allowedRole, allowedRoles }) => {
@@ -35,9 +43,14 @@ const ProtectedRoute = ({ children, allowedRole, allowedRoles }) => {
   }
 
   const authorized = allowedRoles 
-    ? allowedRoles.includes(role) || (allowedRoles.includes('Workforce Officer') && isWorkforceRole(role))
+    ? allowedRoles.includes(role) || 
+      (allowedRoles.includes('Platform Administrator') && isPlatformAdminRole(role)) ||
+      (allowedRoles.includes('Workforce Officer') && isWorkforceRole(role))
     : allowedRole
-    ? role === allowedRole || (allowedRole === 'Workforce Officer' && isWorkforceRole(role)) || (allowedRole === 'Administrator' && isWorkforceRole(role))
+    ? role === allowedRole || 
+      (allowedRole === 'Platform Administrator' && isPlatformAdminRole(role)) ||
+      (allowedRole === 'Workforce Officer' && isWorkforceRole(role)) || 
+      (allowedRole === 'Administrator' && isWorkforceRole(role))
     : true;
 
   if (!authorized) {
@@ -165,6 +178,16 @@ export default function App() {
               </ProtectedRoute>
             }
           />
+          {/* Platform Administrator Portal Routes */}
+          <Route
+            path="/platform-admin/dashboard"
+            element={
+              <ProtectedRoute allowedRole="Platform Administrator">
+                <PlatformAdminDashboard />
+              </ProtectedRoute>
+            }
+          />
+
           {/* Workforce Officer Portal Routes */}
           <Route
             path="/workforce/dashboard"

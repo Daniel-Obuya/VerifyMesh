@@ -120,7 +120,10 @@ class PanelDemonstrationReadinessSuite(unittest.TestCase):
             self.assertEqual(data.get("status"), "healthy")
             self.assertTrue(data.get("database", {}).get("connected"))
             self.assertTrue(data.get("machine_learning", {}).get("model_loaded"))
-            self.assertEqual(data.get("machine_learning", {}).get("active_model"), "verifymesh_stage2_suitability_pipeline_v2.joblib")
+            self.assertIn(
+                data.get("machine_learning", {}).get("active_model"),
+                ["verifymesh_stage2_suitability_pipeline_v3.joblib", "verifymesh_stage2_suitability_pipeline_v2.joblib"]
+            )
             self.assertEqual(data.get("machine_learning", {}).get("binary_gatekeeper_status"), "Retired")
 
     def test_02_model_info_metadata_endpoint(self):

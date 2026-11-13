@@ -33,9 +33,15 @@ from backend.db import (
     create_assessment_attempt,
     get_assessment_attempt,
     get_agent_active_attempt,
+    get_agent_active_topic_attempt,
+    save_attempt_draft_answers,
+    abandon_assessment_attempt,
+    get_agent_assessment_history,
+    expire_stale_assessment_attempts,
     check_agent_assessment_cooldown,
     finalize_assessment_attempt,
     CooldownActiveError,
+    AttemptLimitReachedError,
     save_agent_topic_result,
     get_assessment_topics_list,
     get_assessment_topic_by_id,
@@ -50,6 +56,14 @@ logger = logging.getLogger("verifymesh.competency")
 competency_bp = Blueprint("competency", __name__, url_prefix="/api/competency")
 
 FORBIDDEN_PROTECTED_FEATURES = {
+    "score",
+    "passed",
+    "is_eligible",
+    "points",
+    "points_earned",
+    "decision",
+    "evaluation_decision",
+    "competency_level",
     "assessment_score",
     "communication_score",
     "product_knowledge_score",
@@ -803,6 +817,12 @@ def submit_exam_answers(exam_id):
     task_id = payload.get("task_id")
     attempt_id = payload.get("attempt_id")
 
+    if not isinstance(answers, dict):
+        return jsonify({"success": False, "error": "Invalid submission payload: 'answers' must be a dictionary."}), 400
+
+    if len(answers) > 50:
+        return jsonify({"success": False, "error": "Answers payload exceeds maximum allowed size (50 questions)."}), 400
+
     # 2. Resolve agent_id for authenticated user
     conn = get_mysql_connection()
     if not conn:
@@ -840,7 +860,17 @@ def submit_exam_answers(exam_id):
 
             # 4. Validate Attempt Status & Expiration (Requirements 5 & 10)
             if attempt["status"] == "SUBMITTED":
-                return jsonify({"success": False, "error": "This assessment attempt has already been submitted and finalized."}), 409
+                return jsonify({
+                    "success": True,
+                    "message": "Assessment attempt was already submitted and finalized.",
+                    "data": {
+                        "attempt_id": attempt["attempt_id"],
+                        "attempt_uuid": attempt.get("attempt_uuid"),
+                        "score": float(attempt["score"]) if attempt.get("score") is not None else None,
+                        "passed": bool(attempt.get("passed")),
+                        "decision": attempt.get("decision_details")
+                    }
+                }), 200
 
             if attempt["status"] in ("EXPIRED", "CLOSED"):
                 return jsonify({"success": False, "error": "This assessment attempt has expired or is closed."}), 400
@@ -853,7 +883,7 @@ def submit_exam_answers(exam_id):
                 except Exception:
                     expires_at = now
             if now > expires_at:
-                cursor.execute("UPDATE assessment_attempts SET status = 'EXPIRED', updated_at = NOW() WHERE attempt_id = %s", (attempt["attempt_id"],))
+                cursor.execute("UPDATE assessment_attempts SET status = 'EXPIRED', score = NULL, passed = 0, updated_at = NOW() WHERE attempt_id = %s", (attempt["attempt_id"],))
                 conn.commit()
                 return jsonify({"success": False, "error": "This assessment attempt has expired. Please start a new attempt."}), 400
 
@@ -1227,6 +1257,7 @@ def get_topic_detail(topic_id):
 def get_topic_assessment_questions(topic_id):
     """
     Fetch questions for a specific topic (omits correct_answer).
+    If attempt_id is provided, returns the randomized snapshot for that attempt.
     """
     user_id, _role, err = get_authenticated_agent()
     if err:
@@ -1236,7 +1267,8 @@ def get_topic_assessment_questions(topic_id):
     if not topic:
         return jsonify({"success": False, "error": f"Topic {topic_id} not found."}), 404
 
-    questions = get_topic_questions(topic_id)
+    attempt_id = request.args.get("attempt_id")
+    questions = get_topic_questions(topic_id, attempt_id=attempt_id)
     return jsonify({
         "success": True,
         "data": questions,
@@ -1275,6 +1307,19 @@ def start_topic_attempt(topic_id):
 
             # If task_id is provided, validate that this topic is required for the task
             if task_id:
+                # Enforce Hard Prerequisites First: Candidate must meet certification and experience requirements before attempting task assessment
+                agent_tasks = get_agent_tasks_with_eligibility(user_id)
+                target_task = next((t for t in agent_tasks if t["task_id"] == task_id), None)
+                if target_task:
+                    prereqs = target_task.get("prerequisites", {})
+                    if not prereqs.get("certification_met", True) or not prereqs.get("experience_met", True):
+                        return jsonify({
+                            "success": False,
+                            "error": f"Cannot take assessment: Hard prerequisites not met. {target_task.get('blocking_reason')}",
+                            "blocking_reason": target_task.get("blocking_reason"),
+                            "state": target_task.get("state")
+                        }), 403
+
                 cursor.execute("""
                     SELECT t.exam_id, tr.exam_required 
                     FROM tasks t
@@ -1319,8 +1364,23 @@ def start_topic_attempt(topic_id):
                     "error": str(cae),
                     "cooldown_remaining_seconds": cae.remaining_seconds
                 }), 429
+            except AttemptLimitReachedError as alre:
+                return jsonify({
+                    "success": False,
+                    "error": str(alre)
+                }), 403
 
-            questions = get_topic_questions(topic_id)
+            questions = get_topic_questions(topic_id, attempt_id=attempt["attempt_id"])
+
+            # Extract saved draft answers if resuming an in-progress attempt
+            saved_answers = attempt.get("answers_json")
+            if isinstance(saved_answers, str):
+                try:
+                    saved_answers = json.loads(saved_answers)
+                except Exception:
+                    saved_answers = {}
+            elif not isinstance(saved_answers, dict):
+                saved_answers = {}
 
             return jsonify({
                 "success": True,
@@ -1331,6 +1391,9 @@ def start_topic_attempt(topic_id):
                     "status": attempt["status"],
                     "started_at": attempt["started_at"],
                     "expires_at": attempt["expires_at"],
+                    "answers_version": int(attempt.get("answers_version") or 0),
+                    "saved_answers": saved_answers,
+                    "last_saved_at": attempt.get("last_saved_at"),
                     "topic": topic,
                     "questions": questions
                 }
@@ -1338,6 +1401,160 @@ def start_topic_attempt(topic_id):
     except Exception as e:
         logger.error(f"Error starting topic attempt: {e}")
         return jsonify({"success": False, "error": f"Failed to start topic attempt: {str(e)}"}), 500
+    finally:
+        conn.close()
+
+
+@competency_bp.route("/topics/<int:topic_id>/autosave", methods=["POST"])
+@competency_bp.route("/assessment/attempts/<int:attempt_id>/autosave", methods=["POST"])
+def autosave_topic_assessment(topic_id=None, attempt_id=None):
+    """
+    Autosave in-progress draft answers for an active assessment attempt.
+    Enforces server-side authentication, attempt ownership, IN_PROGRESS state,
+    and optimistic concurrency versioning to prevent race condition overwrites.
+    """
+    user_id, _role, err = get_authenticated_agent()
+    if err:
+        return err
+
+    payload = request.get_json(silent=True) or {}
+
+    # 1. Reject client-supplied protected features / scores
+    supplied_forbidden = [k for k in payload.keys() if k in FORBIDDEN_PROTECTED_FEATURES]
+    if supplied_forbidden:
+        return jsonify({
+            "success": False,
+            "error": "Client-supplied assessment scores or protected model features are strictly forbidden."
+        }), 400
+
+    target_attempt_id = attempt_id or payload.get("attempt_id")
+    answers = payload.get("answers")
+    incoming_version = payload.get("version")
+
+    if not target_attempt_id:
+        return jsonify({"success": False, "error": "attempt_id is required for autosave."}), 400
+
+    if not isinstance(answers, dict):
+        return jsonify({"success": False, "error": "answers object is required for autosave."}), 400
+
+    if len(answers) > 50:
+        return jsonify({"success": False, "error": "Answers payload exceeds maximum allowed size (50 questions)."}), 400
+
+    conn = get_mysql_connection()
+    if not conn:
+        return jsonify({"success": False, "error": "Database unavailable."}), 500
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT agent_id FROM agents WHERE user_id = %s LIMIT 1", (user_id,))
+            ag = cursor.fetchone()
+            if not ag:
+                return jsonify({"success": False, "error": "Agent profile not found."}), 404
+            agent_id = ag["agent_id"]
+
+        success, new_version, last_saved_at, error_msg = save_attempt_draft_answers(
+            attempt_id=target_attempt_id,
+            agent_id=agent_id,
+            answers=answers,
+            incoming_version=incoming_version
+        )
+
+        if not success:
+            return jsonify({"success": False, "error": error_msg}), 400
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "attempt_id": target_attempt_id,
+                "answers_version": new_version,
+                "last_saved_at": last_saved_at
+            }
+        }), 200
+    except Exception as e:
+        logger.error(f"Error during autosave: {e}")
+        return jsonify({"success": False, "error": f"Autosave failed: {str(e)}"}), 500
+    finally:
+        conn.close()
+
+
+@competency_bp.route("/topics/<int:topic_id>/abandon", methods=["POST"])
+def abandon_topic_assessment(topic_id):
+    """
+    Explicitly abandon/forfeit an active assessment attempt.
+    Status transitions to ABANDONED and is audited.
+    """
+    user_id, _role, err = get_authenticated_agent()
+    if err:
+        return err
+
+    payload = request.get_json(silent=True) or {}
+    attempt_id = payload.get("attempt_id")
+    reason = payload.get("reason", "Candidate deliberately abandoned assessment attempt")
+
+    if not attempt_id:
+        return jsonify({"success": False, "error": "attempt_id is required."}), 400
+
+    conn = get_mysql_connection()
+    if not conn:
+        return jsonify({"success": False, "error": "Database unavailable."}), 500
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT agent_id FROM agents WHERE user_id = %s LIMIT 1", (user_id,))
+            ag = cursor.fetchone()
+            if not ag:
+                return jsonify({"success": False, "error": "Agent profile not found."}), 404
+            agent_id = ag["agent_id"]
+
+        success, err_msg = abandon_assessment_attempt(attempt_id, agent_id, reason=reason)
+        if not success:
+            return jsonify({"success": False, "error": err_msg}), 400
+
+        return jsonify({
+            "success": True,
+            "message": "Assessment attempt abandoned.",
+            "data": {
+                "attempt_id": attempt_id,
+                "status": "ABANDONED",
+                "reason": reason
+            }
+        }), 200
+    except Exception as e:
+        logger.error(f"Error abandoning attempt: {e}")
+        return jsonify({"success": False, "error": f"Failed to abandon attempt: {str(e)}"}), 500
+    finally:
+        conn.close()
+
+
+@competency_bp.route("/topics/<int:topic_id>/history", methods=["GET"])
+def get_topic_attempt_history(topic_id):
+    """
+    Fetch full historical attempts for the authenticated agent on this topic.
+    """
+    user_id, _role, err = get_authenticated_agent()
+    if err:
+        return err
+
+    conn = get_mysql_connection()
+    if not conn:
+        return jsonify({"success": False, "error": "Database unavailable."}), 500
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT agent_id FROM agents WHERE user_id = %s LIMIT 1", (user_id,))
+            ag = cursor.fetchone()
+            if not ag:
+                return jsonify({"success": False, "error": "Agent profile not found."}), 404
+            agent_id = ag["agent_id"]
+
+        history = get_agent_assessment_history(agent_id, topic_id=topic_id)
+        return jsonify({
+            "success": True,
+            "data": history
+        }), 200
+    except Exception as e:
+        logger.error(f"Error fetching attempt history: {e}")
+        return jsonify({"success": False, "error": f"Failed to fetch attempt history: {str(e)}"}), 500
     finally:
         conn.close()
 
@@ -1367,6 +1584,12 @@ def submit_topic_answers(topic_id):
     task_id = payload.get("task_id")
     attempt_id = payload.get("attempt_id")
 
+    if not isinstance(answers, dict):
+        return jsonify({"success": False, "error": "Invalid submission payload: 'answers' must be a dictionary."}), 400
+
+    if len(answers) > 50:
+        return jsonify({"success": False, "error": "Answers payload exceeds maximum allowed size (50 questions)."}), 400
+
     conn = get_mysql_connection()
     if not conn:
         return jsonify({"success": False, "error": "Database unavailable"}), 500
@@ -1381,6 +1604,19 @@ def submit_topic_answers(topic_id):
 
             # If task_id is provided, validate that this topic is required for the task
             if task_id:
+                # Enforce Hard Prerequisites First: Candidate must meet certification and experience requirements before attempting task assessment
+                agent_tasks = get_agent_tasks_with_eligibility(user_id)
+                target_task = next((t for t in agent_tasks if t["task_id"] == task_id), None)
+                if target_task:
+                    prereqs = target_task.get("prerequisites", {})
+                    if not prereqs.get("certification_met", True) or not prereqs.get("experience_met", True):
+                        return jsonify({
+                            "success": False,
+                            "error": f"Cannot take assessment: Hard prerequisites not met. {target_task.get('blocking_reason')}",
+                            "blocking_reason": target_task.get("blocking_reason"),
+                            "state": target_task.get("state")
+                        }), 403
+
                 cursor.execute("""
                     SELECT t.exam_id, tr.exam_required 
                     FROM tasks t
@@ -1433,7 +1669,9 @@ def submit_topic_answers(topic_id):
                         "error": "Valid assessment attempt_id is required for submission."
                     }), 400
 
-            attempt = get_assessment_attempt(attempt_id)
+            # Acquire row lock inside transaction to guarantee atomic, concurrency-safe submission
+            cursor.execute("SELECT * FROM assessment_attempts WHERE attempt_id = %s FOR UPDATE", (attempt_id,))
+            attempt = cursor.fetchone()
             if not attempt:
                 return jsonify({"success": False, "error": f"Assessment attempt {attempt_id} not found."}), 404
 
@@ -1441,7 +1679,17 @@ def submit_topic_answers(topic_id):
                 return jsonify({"success": False, "error": "Unauthorized: assessment attempt belongs to another agent."}), 403
 
             if attempt["status"] == "SUBMITTED":
-                return jsonify({"success": False, "error": "This assessment attempt has already been submitted and finalized."}), 409
+                return jsonify({
+                    "success": True,
+                    "message": "Assessment attempt was already submitted and finalized.",
+                    "data": {
+                        "attempt_id": attempt["attempt_id"],
+                        "attempt_uuid": attempt.get("attempt_uuid"),
+                        "score": float(attempt["score"]) if attempt.get("score") is not None else None,
+                        "passed": bool(attempt.get("passed")),
+                        "decision": attempt.get("decision_details")
+                    }
+                }), 200
 
             if attempt["status"] in ("EXPIRED", "CLOSED"):
                 return jsonify({"success": False, "error": "This assessment attempt has expired or is closed."}), 400
@@ -1454,7 +1702,7 @@ def submit_topic_answers(topic_id):
                 except Exception:
                     expires_at = now
             if now > expires_at:
-                cursor.execute("UPDATE assessment_attempts SET status = 'EXPIRED', updated_at = NOW() WHERE attempt_id = %s", (attempt["attempt_id"],))
+                cursor.execute("UPDATE assessment_attempts SET status = 'EXPIRED', score = NULL, passed = 0, updated_at = NOW() WHERE attempt_id = %s", (attempt["attempt_id"],))
                 conn.commit()
                 return jsonify({"success": False, "error": "This assessment attempt has expired. Please start a new attempt."}), 400
 
@@ -1510,6 +1758,10 @@ def submit_topic_answers(topic_id):
             question_feedback = []
             normalized_answers = {}
 
+            snap_raw = attempt.get("question_snapshot_json")
+            snapshot = json.loads(snap_raw) if isinstance(snap_raw, str) else (snap_raw or {})
+            snap_map = {sq["question_id"]: sq.get("display_to_original", {}) for sq in snapshot.get("questions", [])}
+
             for q in questions:
                 q_id = str(q["question_id"])
                 pts = float(q["points"])
@@ -1531,7 +1783,9 @@ def submit_topic_answers(topic_id):
                     user_ans = str(raw_ans).strip().upper()
 
                 normalized_answers[q_id] = user_ans
-                is_correct = (user_ans == correct)
+                q_int_id = q["question_id"]
+                mapped_opt = snap_map.get(q_int_id, {}).get(user_ans, user_ans)
+                is_correct = (mapped_opt == correct)
                 if is_correct:
                     earned_points += pts
 
@@ -1548,14 +1802,15 @@ def submit_topic_answers(topic_id):
             rounded_passing = round(passing_score, 2)
             passed = bool(rounded_score >= rounded_passing)
 
-            # 4. Save into agent_topic_results
+            # 4. Save into agent_topic_results (using active cursor/connection to avoid deadlock)
             save_agent_topic_result(
                 agent_id=agent_id,
                 topic_id=topic_id,
                 score=rounded_score,
                 passed=passed,
                 answers_json=normalized_answers,
-                attempt_id=attempt["attempt_id"]
+                attempt_id=attempt["attempt_id"],
+                cursor=cursor
             )
 
             # 5. Fetch all available topic scores for ML feature vector
@@ -1583,10 +1838,6 @@ def submit_topic_answers(topic_id):
 
             v_exp = calculate_agent_verified_experience(agent_id, cursor)
             v_cert = calculate_agent_verified_certifications(agent_id, cursor)
-
-            cursor.close()
-            conn.close()
-            conn = None
 
             ml_features = {
                 "previous_experience_months": float(v_exp["previous_experience_months"]),
@@ -1643,7 +1894,8 @@ def submit_topic_answers(topic_id):
                 prediction_data=prediction_data,
                 exam_id=mapped_exam_id,
                 task_id=task_id,
-                attempt_id=attempt["attempt_id"]
+                attempt_id=attempt["attempt_id"],
+                cursor=cursor
             )
 
             labeled_probs = {
@@ -1679,8 +1931,12 @@ def submit_topic_answers(topic_id):
                 model_version=model_ver,
                 exam_result_id=saved["exam_result_id"],
                 prediction_id=saved["prediction_id"],
-                decision_details=decision_details
+                decision_details=decision_details,
+                cursor=cursor
             )
+
+            # Atomically commit all changes and release lock
+            conn.commit()
 
             # 7. Evaluate Task Eligibility (if task_id provided)
             task_eligibility = None

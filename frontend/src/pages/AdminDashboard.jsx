@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { 
   LayoutGrid, 
   User, 
@@ -14,6 +14,8 @@ import {
   ChevronDown, 
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
+  Info,
   Check, 
   ArrowRight, 
   Sparkles, 
@@ -29,7 +31,8 @@ import {
   Phone,
   Users,
   XCircle,
-  BrainCircuit
+  BrainCircuit,
+  Shield
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { BrandLogo } from '../components/auth/BrandLogo';
@@ -133,6 +136,16 @@ export const AdminDashboard = () => {
   const [taskApplicants, setTaskApplicants] = useState([]);
   const [isLoadingApplicants, setIsLoadingApplicants] = useState(false);
   const [isActionProcessing, setIsActionProcessing] = useState(false);
+  const [expandedCompetencies, setExpandedCompetencies] = useState({});
+  const [assignWarningModal, setAssignWarningModal] = useState({
+    isOpen: false,
+    applicant: null,
+    overrideReason: '',
+  });
+
+  const toggleCompetencyBreakdown = (appId) => {
+    setExpandedCompetencies(prev => ({ ...prev, [appId]: !prev[appId] }));
+  };
 
   // Fetch all initial data
   const fetchData = async () => {
@@ -394,12 +407,27 @@ export const AdminDashboard = () => {
     }
   };
 
-  const handleAssignTask = async (applicationId) => {
+  const handleAssignTask = async (applicationId, overrideReason = null) => {
+    const applicant = taskApplicants.find(a => a.application_id === applicationId);
+    const appliedThreshold = applicant?.applied_threshold ?? applicant?.advisory_threshold ?? 0.60;
+    const isBelowThreshold = applicant?.suitability_score !== null && applicant?.suitability_score !== undefined && applicant?.suitability_score < appliedThreshold;
+
+    if (isBelowThreshold && !overrideReason) {
+      setAssignWarningModal({
+        isOpen: true,
+        applicant,
+        overrideReason: '',
+      });
+      return;
+    }
+
     setIsActionProcessing(true);
     try {
-      const res = await adminService.assignTaskApplication(applicationId);
+      const payload = overrideReason ? { override_reason: overrideReason } : {};
+      const res = await adminService.assignTaskApplication(applicationId, payload);
       if (res?.success) {
-        showToast('Task successfully assigned to applicant!');
+        showToast(overrideReason ? 'Task assigned with administrative override logged.' : 'Task successfully assigned to applicant!');
+        setAssignWarningModal({ isOpen: false, applicant: null, overrideReason: '' });
         const appsRes = await adminService.getTaskApplicants(selectedTaskForApplicants.task_id);
         if (appsRes?.data) setTaskApplicants(appsRes.data);
         const tasksRes = await adminService.getTasks();
@@ -591,6 +619,17 @@ export const AdminDashboard = () => {
 
         {/* User Info & Actions */}
         <div className="flex items-center gap-3 sm:gap-4">
+          {['Platform Administrator', 'PLATFORM_ADMIN', 'Administrator', 'ADMIN'].includes(user?.role) && (
+            <Link
+              to="/platform-admin/dashboard"
+              className="hidden md:flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-purple-950/70 hover:bg-purple-900/80 text-purple-200 border border-purple-500/40 transition-colors"
+              title="Open Platform Administrator Console"
+            >
+              <Shield className="w-3.5 h-3.5 text-purple-400" />
+              <span>Platform Admin Console</span>
+            </Link>
+          )}
+
           <button
             type="button"
             onClick={fetchData}
@@ -688,7 +727,6 @@ export const AdminDashboard = () => {
               { id: 'overview', label: 'Overview', icon: LayoutGrid, count: null },
               { id: 'agents', label: 'Agents', icon: Users, count: agentsList.length },
               { id: 'tasks', label: 'Tasks', icon: Briefcase, count: tasksList.length },
-              { id: 'assessments', label: 'Assessments', icon: CheckCircle2, count: assessmentsList.length },
               { id: 'reviews', label: 'Eligibility Reviews', icon: ShieldCheck, count: pendingReviewsCount, isAmber: true },
               { id: 'verifications', label: 'Verifications', icon: Award, count: pendingVerificationsCount, isAmber: true }
             ].map((item) => {
@@ -1147,78 +1185,148 @@ export const AdminDashboard = () => {
                     </div>
                   </div>
 
-                  {/* Recent Operational Activity Stream */}
+                  {/* Actionable Operational Queues: Pending Verifications & Reviews */}
                   <div className="bg-[#0b1020] rounded-2xl p-6 border border-[#1b2542] shadow-xl">
                     <div className="flex items-center justify-between pb-4 border-b border-[#1b2542]">
                       <div>
-                        <h2 className="text-base font-bold font-sora text-white">Recent Operational Activity</h2>
-                        <p className="text-xs text-slate-400 mt-0.5">Latest evaluations and assessments processed across the workforce pool</p>
+                        <h2 className="text-base font-bold font-sora text-white">Workforce Action Queues</h2>
+                        <p className="text-xs text-slate-400 mt-0.5">Pending candidate verifications and task eligibility evaluations requiring officer attention</p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab('assessments')}
-                        className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 hover:underline flex items-center gap-1 cursor-pointer"
-                      >
-                        View all assessments &rarr;
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('verifications')}
+                          className="text-xs font-semibold text-amber-400 hover:text-amber-300 hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          Verifications ({pendingVerificationsCount}) &rarr;
+                        </button>
+                        <span className="text-slate-600">&bull;</span>
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('reviews')}
+                          className="text-xs font-semibold text-purple-400 hover:text-purple-300 hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          Reviews ({pendingReviewsCount}) &rarr;
+                        </button>
+                      </div>
                     </div>
 
-                    {overviewData?.recent_assessments?.length > 0 ? (
-                      <div className="overflow-x-auto mt-4">
-                        <table className="w-full text-left text-xs">
-                          <thead>
-                            <tr className="border-b border-[#1b2542] text-[10px] font-semibold text-slate-400 uppercase tracking-wider bg-[#0d1428]">
-                              <th className="py-3 px-3.5 font-semibold">Candidate Agent</th>
-                              <th className="py-3 px-3.5 font-semibold">Evaluation Score</th>
-                              <th className="py-3 px-3.5 font-semibold">Attempt</th>
-                              <th className="py-3 px-3.5 font-semibold">Predicted Competency</th>
-                              <th className="py-3 px-3.5 font-semibold">Confidence</th>
-                              <th className="py-3 px-3.5 font-semibold">Completed Date</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-[#1b2542] text-slate-300">
-                            {overviewData.recent_assessments.map((a) => (
-                              <tr key={a.exam_result_id} className="hover:bg-[#121a30] transition-colors">
-                                <td className="py-3 px-3.5 font-semibold text-white">
-                                  {a.agent_name}
-                                  <span className="block text-[11px] text-slate-400 font-normal">{a.agent_email}</span>
-                                </td>
-                                <td className="py-3 px-3.5">
-                                  <span className="font-semibold text-white">{a.assessment_score}%</span>
-                                  {a.passed ? (
-                                    <span className="ml-2 text-[10px] font-semibold text-emerald-400 bg-emerald-950/70 px-2 py-0.5 rounded-full border border-emerald-500/40">
-                                      Passed
-                                    </span>
-                                  ) : (
-                                    <span className="ml-2 text-[10px] font-semibold text-rose-400 bg-rose-950/70 px-2 py-0.5 rounded-full border border-rose-500/40">
-                                      Failed
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="py-3 px-3.5 text-slate-400">Attempt #{a.attempt_number}</td>
-                                <td className="py-3 px-3.5">
-                                  <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${getCompetencyBadgeStyle(a.predicted_competency)}`}>
-                                    {a.predicted_competency || 'In Review'}
-                                  </span>
-                                </td>
-                                <td className="py-3 px-3.5 text-slate-300 font-mono text-[11px]">
-                                  {a.confidence ? `${Math.round(a.confidence > 1 ? a.confidence : a.confidence * 100)}%` : '—'}
-                                </td>
-                                <td className="py-3 px-3.5 text-slate-400 text-[11px]">
-                                  {a.completed_at ? new Date(a.completed_at).toLocaleString() : '—'}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                    <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Sub-Queue 1: Pending Certifications & Experiences */}
+                      <div className="p-4 rounded-xl bg-[#0e1528] border border-[#1b2542] flex flex-col justify-between">
+                        <div>
+                          <div className="flex items-center justify-between mb-3">
+                            <span className="text-xs font-bold text-slate-200 flex items-center gap-2">
+                              <Award className="w-4 h-4 text-amber-400" />
+                              Pending Credential & Experience Verifications
+                            </span>
+                            <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-amber-950/70 text-amber-300 border border-amber-500/40">
+                              {pendingVerificationsCount}
+                            </span>
+                          </div>
+
+                          {pendingVerificationsCount > 0 ? (
+                            <div className="space-y-2 text-xs">
+                              {verificationsData?.certifications?.slice(0, 3).map((c) => (
+                                <div key={`c-${c.agent_cert_id}`} className="p-2.5 rounded-lg bg-[#080d1a] border border-[#1b2542] flex items-center justify-between">
+                                  <div>
+                                    <span className="font-semibold text-white">{c.certification_name}</span>
+                                    <span className="block text-[11px] text-slate-400">{c.agent_name} &bull; {c.issuing_organization || 'Issuer'}</span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => setActiveTab('verifications')}
+                                    className="text-[11px] font-semibold text-amber-400 hover:text-amber-300 underline cursor-pointer"
+                                  >
+                                    Review &rarr;
+                                  </button>
+                                </div>
+                              ))}
+                              {verificationsData?.experiences?.slice(0, 3).map((e) => (
+                                <div key={`e-${e.experience_id}`} className="p-2.5 rounded-lg bg-[#080d1a] border border-[#1b2542] flex items-center justify-between">
+                                  <div>
+                                    <span className="font-semibold text-white">{e.job_title}</span>
+                                    <span className="block text-[11px] text-slate-400">{e.agent_name} &bull; {e.company_name}</span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => setActiveTab('verifications')}
+                                    className="text-[11px] font-semibold text-amber-400 hover:text-amber-300 underline cursor-pointer"
+                                  >
+                                    Review &rarr;
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="py-6 text-center">
+                              <CheckCircle2 className="w-6 h-6 text-emerald-400 mx-auto mb-1.5" />
+                              <p className="text-xs text-slate-400">All credentials and experience tenures are verified.</p>
+                            </div>
+                          )}
+                        </div>
+
+                        {pendingVerificationsCount > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('verifications')}
+                            className="mt-3 w-full py-1.5 px-3 rounded-lg text-xs font-semibold bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 border border-amber-500/30 transition-colors cursor-pointer"
+                          >
+                            Open Verifications Queue &rarr;
+                          </button>
+                        )}
                       </div>
-                    ) : (
-                      <div className="py-10 text-center">
-                        <CheckCircle2 className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                        <p className="text-sm font-semibold text-slate-300">No assessments recorded yet</p>
-                        <p className="text-xs text-slate-500 mt-0.5">Evaluation submissions will automatically stream into this operational feed.</p>
+
+                      {/* Sub-Queue 2: Pending Eligibility Evaluations */}
+                      <div className="p-4 rounded-xl bg-[#0e1528] border border-[#1b2542] flex flex-col justify-between">
+                        <div>
+                          <div className="flex items-center justify-between mb-3">
+                            <span className="text-xs font-bold text-slate-200 flex items-center gap-2">
+                              <ShieldCheck className="w-4 h-4 text-purple-400" />
+                              Pending Task Eligibility Reviews
+                            </span>
+                            <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-purple-950/70 text-purple-300 border border-purple-500/40">
+                              {pendingReviewsCount}
+                            </span>
+                          </div>
+
+                          {pendingReviewsCount > 0 ? (
+                            <div className="space-y-2 text-xs">
+                              {reviewsList?.filter((r) => r.review_status === 'PENDING').slice(0, 4).map((r) => (
+                                <div key={r.evaluation_id} className="p-2.5 rounded-lg bg-[#080d1a] border border-[#1b2542] flex items-center justify-between">
+                                  <div>
+                                    <span className="font-semibold text-white">{r.agent_name}</span>
+                                    <span className="block text-[11px] text-slate-400">{r.task_title} &bull; Score: {r.assessment_score ? `${r.assessment_score}%` : 'N/A'}</span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => setActiveTab('reviews')}
+                                    className="text-[11px] font-semibold text-purple-400 hover:text-purple-300 underline cursor-pointer"
+                                  >
+                                    Evaluate &rarr;
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="py-6 text-center">
+                              <CheckCircle2 className="w-6 h-6 text-emerald-400 mx-auto mb-1.5" />
+                              <p className="text-xs text-slate-400">All candidate eligibility reviews have been processed.</p>
+                            </div>
+                          )}
+                        </div>
+
+                        {pendingReviewsCount > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('reviews')}
+                            className="mt-3 w-full py-1.5 px-3 rounded-lg text-xs font-semibold bg-purple-500/10 text-purple-300 hover:bg-purple-500/20 border border-purple-500/30 transition-colors cursor-pointer"
+                          >
+                            Open Eligibility Reviews Queue &rarr;
+                          </button>
+                        )}
                       </div>
-                    )}
+                    </div>
                   </div>
                 </div>
               )}
@@ -1732,208 +1840,7 @@ export const AdminDashboard = () => {
                 </div>
               )}
 
-              {/* ========================================================= */}
-              {/* TAB 4: ASSESSMENTS AUDIT */}
-              {/* ========================================================= */}
-              {activeTab === 'assessments' && (
-                <div className="space-y-6">
-                  {/* Header Title */}
-                  <div className="bg-[#0b1020] rounded-2xl p-6 sm:p-7 border border-[#1b2542] shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div>
-                      <span className="text-[11px] font-bold text-indigo-400 tracking-wider uppercase block">
-                        AUDIT TRAIL &amp; INFERENCE LOGS
-                      </span>
-                      <h1 className="text-2xl sm:text-3xl font-bold font-sora text-white mt-1 tracking-tight">
-                        Assessment History
-                      </h1>
-                      <p className="text-xs sm:text-sm text-slate-400 mt-1">
-                        Historical log of competency assessments, exam battery scores, passing policy (&ge;70%), and ML binary classification outputs.
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
-                      <span className="text-xs text-slate-300 bg-[#0d1428] px-3 py-1.5 rounded-xl border border-[#1e2a4a]">
-                        Total: <strong className="text-white font-mono">{assessmentsList.length}</strong>
-                      </span>
-                      <span className="text-xs text-emerald-400 bg-emerald-950/40 px-3 py-1.5 rounded-xl border border-emerald-500/30">
-                        Passed: <strong className="font-mono">{passedAssessments}</strong>
-                      </span>
-                      <span className="text-xs text-indigo-300 bg-indigo-950/40 px-3 py-1.5 rounded-xl border border-indigo-500/30">
-                        Pass Rate: <strong className="font-mono">{assessmentsList.length > 0 ? Math.round((passedAssessments / assessmentsList.length) * 100) : 0}%</strong>
-                      </span>
-                    </div>
-                  </div>
 
-                  {/* Search and Filters Toolbar */}
-                  <div className="bg-[#0b1020] rounded-2xl p-4 sm:p-5 border border-[#1b2542] shadow-xl flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
-                    <div className="flex-1 relative">
-                      <input
-                        type="text"
-                        placeholder="Search assessments by agent name, email, exam, or category..."
-                        value={assessmentSearch}
-                        onChange={(e) => setAssessmentSearch(e.target.value)}
-                        className="w-full pl-9 pr-9 py-2 rounded-xl bg-[#0d1428] border border-[#1e2a4a] text-white placeholder:text-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/40 transition-all"
-                      />
-                      <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                      {assessmentSearch && (
-                        <button
-                          type="button"
-                          onClick={() => setAssessmentSearch('')}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2.5">
-                      <select
-                        value={assessmentResultFilter}
-                        onChange={(e) => setAssessmentResultFilter(e.target.value)}
-                        className="px-3 py-2 rounded-xl bg-[#0d1428] border border-[#1e2a4a] text-xs font-medium text-slate-300 focus:outline-none focus:border-indigo-500 transition-all cursor-pointer"
-                      >
-                        <option value="ALL">All Outcomes</option>
-                        <option value="PASSED">Passed Only (&ge;70%)</option>
-                        <option value="FAILED">Failed Only (&lt;70%)</option>
-                      </select>
-
-                      <select
-                        value={assessmentCompFilter}
-                        onChange={(e) => setAssessmentCompFilter(e.target.value)}
-                        className="px-3 py-2 rounded-xl bg-[#0d1428] border border-[#1e2a4a] text-xs font-medium text-slate-300 focus:outline-none focus:border-indigo-500 transition-all cursor-pointer"
-                      >
-                        <option value="ALL">All Predicted Classes</option>
-                        <option value="ELIGIBLE">Eligible</option>
-                        <option value="NOT_ELIGIBLE">Not Eligible</option>
-                      </select>
-
-                      {(assessmentSearch || assessmentResultFilter !== 'ALL' || assessmentCompFilter !== 'ALL') && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAssessmentSearch('');
-                            setAssessmentResultFilter('ALL');
-                            setAssessmentCompFilter('ALL');
-                          }}
-                          className="px-3 py-2 rounded-xl bg-[#151f38] text-xs font-semibold text-slate-300 hover:text-white border border-[#2b3a67] transition-all cursor-pointer"
-                        >
-                          Reset Filters
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Assessments Table */}
-                  <div className="bg-[#0b1020] rounded-2xl border border-[#1b2542] shadow-xl overflow-hidden">
-                    {filteredAssessments.length > 0 ? (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left text-xs sm:text-sm">
-                          <thead>
-                            <tr className="bg-[#080d1a] border-b border-[#1b2542] text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                              <th className="py-3.5 px-4 font-semibold">ID</th>
-                              <th className="py-3.5 px-4 font-semibold">Candidate</th>
-                              <th className="py-3.5 px-4 font-semibold">Assessment Battery</th>
-                              <th className="py-3.5 px-4 font-semibold">Score &amp; Policy (&ge;70%)</th>
-                              <th className="py-3.5 px-4 font-semibold">Attempt</th>
-                              <th className="py-3.5 px-4 font-semibold">AI Predicted Competency</th>
-                              <th className="py-3.5 px-4 font-semibold">Confidence</th>
-                              <th className="py-3.5 px-4 font-semibold">Date Completed</th>
-                              <th className="py-3.5 px-4 font-semibold text-right">Details</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-[#1b2542]/60 text-slate-300">
-                            {filteredAssessments.map((item) => {
-                              const isPassed = item.passed === 1 || item.passed === true || (item.assessment_score >= (item.passing_score || 70));
-                              const candidateInitials = item.agent_name
-                                ? item.agent_name.split(' ').filter(Boolean).map(n => n[0]).join('').substring(0, 2).toUpperCase()
-                                : 'AG';
-
-                              return (
-                                <tr key={item.exam_result_id} className="hover:bg-[#121a36]/40 transition-colors">
-                                  <td className="py-3.5 px-4 font-mono text-xs text-slate-500">
-                                    #{item.exam_result_id}
-                                  </td>
-                                  <td className="py-3.5 px-4">
-                                    <div className="flex items-center gap-2.5">
-                                      <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0">
-                                        {candidateInitials}
-                                      </div>
-                                      <div>
-                                        <p className="font-semibold text-white leading-tight">{item.agent_name}</p>
-                                        <p className="text-xs text-slate-400 font-normal">{item.agent_email}</p>
-                                      </div>
-                                    </div>
-                                  </td>
-                                  <td className="py-3.5 px-4">
-                                    <p className="text-xs font-semibold text-indigo-300 leading-tight">
-                                      {item.exam_name || 'Standard Competency Battery'}
-                                    </p>
-                                    <span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-[#151f38] text-slate-400 border border-[#23315c] mt-1">
-                                      {item.category_name || 'General Domain'}
-                                    </span>
-                                  </td>
-                                  <td className="py-3.5 px-4">
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-bold text-white font-mono text-sm">
-                                        {item.assessment_score}%
-                                      </span>
-                                      {isPassed ? (
-                                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded-full">
-                                          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                                          Passed
-                                        </span>
-                                      ) : (
-                                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-400 bg-rose-950/60 border border-rose-500/40 px-2 py-0.5 rounded-full">
-                                          <XCircle className="w-3 h-3 text-rose-400" />
-                                          Failed
-                                        </span>
-                                      )}
-                                    </div>
-                                    <p className="text-[10px] text-slate-500 mt-0.5">
-                                      Threshold: &ge;{item.passing_score || 70}%
-                                    </p>
-                                  </td>
-                                  <td className="py-3.5 px-4 font-medium text-slate-400">
-                                    Attempt #{item.attempt_number}
-                                  </td>
-                                  <td className="py-3.5 px-4">
-                                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${getCompetencyBadgeStyle(item.predicted_competency)}`}>
-                                      {item.predicted_competency || 'In Review'}
-                                    </span>
-                                  </td>
-                                  <td className="py-3.5 px-4 font-mono text-slate-300">
-                                    {item.confidence_percent ? `${item.confidence_percent}%` : '—'}
-                                  </td>
-                                  <td className="py-3.5 px-4 text-xs text-slate-400">
-                                    {item.completed_at ? new Date(item.completed_at).toLocaleString() : '—'}
-                                  </td>
-                                  <td className="py-3.5 px-4 text-right">
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setSelectedAssessment(item);
-                                        setIsAssessmentModalOpen(true);
-                                      }}
-                                      className="px-3 py-1.5 rounded-xl bg-[#151f38] hover:bg-[#1c294d] text-indigo-300 hover:text-white border border-[#23315c] text-xs font-semibold cursor-pointer transition-all"
-                                    >
-                                      Inspect Battery
-                                    </button>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    ) : (
-                      <div className="p-12 text-center">
-                        <CheckCircle2 className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                        <p className="text-sm font-semibold text-slate-300">No assessment records found</p>
-                        <p className="text-xs text-slate-500 mt-1">No evaluations match the search or filter criteria.</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
 
               {/* ========================================================= */}
               {/* TAB 5: ELIGIBILITY REVIEWS */}
@@ -2738,154 +2645,7 @@ export const AdminDashboard = () => {
         </div>
       )}
 
-      {/* ================================================================= */}
-      {/* MODAL: INSPECT ASSESSMENT FEATURES */}
-      {/* ================================================================= */}
-      {isAssessmentModalOpen && selectedAssessment && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="w-full max-w-xl bg-[#0b1020] rounded-2xl border border-[#1b2542] p-6 text-white shadow-2xl relative space-y-5 max-h-[90vh] overflow-y-auto">
-            {/* Header */}
-            <div className="flex items-start justify-between pb-3 border-b border-[#1b2542]">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">
-                    EVALUATION DOSSIER #{selectedAssessment.exam_result_id}
-                  </span>
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${getCompetencyBadgeStyle(selectedAssessment.predicted_competency)}`}>
-                    {selectedAssessment.predicted_competency}
-                  </span>
-                </div>
-                <h3 className="text-base font-bold font-sora text-white mt-1">
-                  {selectedAssessment.agent_name}
-                </h3>
-                <p className="text-xs text-slate-400">
-                  Attempt #{selectedAssessment.attempt_number} &bull; {selectedAssessment.completed_at ? new Date(selectedAssessment.completed_at).toLocaleString() : 'Date pending'}
-                </p>
-              </div>
 
-              <button
-                type="button"
-                onClick={() => setIsAssessmentModalOpen(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Assessment Battery & Score Card */}
-            <div className="p-4 rounded-xl bg-[#0d1428] border border-[#1e2a4a] space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                    {selectedAssessment.category_name || 'General Domain'}
-                  </span>
-                  <h4 className="text-sm font-bold text-white mt-0.5">
-                    {selectedAssessment.exam_name || 'Standard Competency Assessment Battery'}
-                  </h4>
-                </div>
-                <div className="text-right shrink-0">
-                  <div className="flex items-center gap-1.5 justify-end">
-                    <span className="text-lg font-bold font-mono text-white">
-                      {selectedAssessment.assessment_score}%
-                    </span>
-                    {(selectedAssessment.passed === 1 || selectedAssessment.passed === true || (selectedAssessment.assessment_score >= (selectedAssessment.passing_score || 70))) ? (
-                      <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded-full">
-                        Passed
-                      </span>
-                    ) : (
-                      <span className="text-[10px] font-semibold text-rose-400 bg-rose-950/60 border border-rose-500/40 px-2 py-0.5 rounded-full">
-                        Failed
-                      </span>
-                    )}
-                  </div>
-                  <span className="text-[10px] text-slate-500 block mt-0.5">
-                    Passing Threshold: &ge;{selectedAssessment.passing_score || 70}%
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Feature Inputs for Inference */}
-            <div>
-              <h5 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2.5">
-                Model Input Feature Vector
-              </h5>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
-                <div className="p-2.5 rounded-xl bg-[#0d1428] border border-[#1e2a4a]">
-                  <span className="text-[10px] text-slate-400 block font-medium">Exam Score</span>
-                  <span className="font-bold text-white mt-0.5 block font-mono">
-                    {selectedAssessment.features?.assessment_score ?? selectedAssessment.assessment_score}%
-                  </span>
-                </div>
-                <div className="p-2.5 rounded-xl bg-[#0d1428] border border-[#1e2a4a]">
-                  <span className="text-[10px] text-slate-400 block font-medium">Communication</span>
-                  <span className="font-bold text-white mt-0.5 block font-mono">
-                    {selectedAssessment.features?.communication_score != null ? `${selectedAssessment.features.communication_score}%` : '—'}
-                  </span>
-                </div>
-                <div className="p-2.5 rounded-xl bg-[#0d1428] border border-[#1e2a4a]">
-                  <span className="text-[10px] text-slate-400 block font-medium">Product Knowl.</span>
-                  <span className="font-bold text-white mt-0.5 block font-mono">
-                    {selectedAssessment.features?.product_knowledge_score != null ? `${selectedAssessment.features.product_knowledge_score}%` : '—'}
-                  </span>
-                </div>
-                <div className="p-2.5 rounded-xl bg-[#0d1428] border border-[#1e2a4a]">
-                  <span className="text-[10px] text-slate-400 block font-medium">Sales Skill</span>
-                  <span className="font-bold text-white mt-0.5 block font-mono">
-                    {selectedAssessment.features?.sales_skill_score != null ? `${selectedAssessment.features.sales_skill_score}%` : '—'}
-                  </span>
-                </div>
-                <div className="p-2.5 rounded-xl bg-[#0d1428] border border-[#1e2a4a]">
-                  <span className="text-[10px] text-slate-400 block font-medium">Customer Serv.</span>
-                  <span className="font-bold text-white mt-0.5 block font-mono">
-                    {selectedAssessment.features?.customer_service_score != null ? `${selectedAssessment.features.customer_service_score}%` : '—'}
-                  </span>
-                </div>
-                <div className="p-2.5 rounded-xl bg-[#0d1428] border border-[#1e2a4a]">
-                  <span className="text-[10px] text-slate-400 block font-medium">Total Exp.</span>
-                  <span className="font-bold text-white mt-0.5 block font-mono">
-                    {selectedAssessment.features?.previous_experience_months != null ? `${selectedAssessment.features.previous_experience_months} mos` : '—'}
-                  </span>
-                </div>
-                <div className="p-2.5 rounded-xl bg-[#0d1428] border border-[#1e2a4a]">
-                  <span className="text-[10px] text-slate-400 block font-medium">Sales Exp.</span>
-                  <span className="font-bold text-white mt-0.5 block font-mono">
-                    {selectedAssessment.features?.sales_experience_months != null ? `${selectedAssessment.features.sales_experience_months} mos` : '—'}
-                  </span>
-                </div>
-                <div className="p-2.5 rounded-xl bg-[#0d1428] border border-[#1e2a4a]">
-                  <span className="text-[10px] text-slate-400 block font-medium">Verified Certs</span>
-                  <span className="font-bold text-white mt-0.5 block font-mono">
-                    {selectedAssessment.features?.certification_count ?? 0}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Inference Confidence */}
-            <div className="p-3.5 rounded-xl bg-[#0d1428] border border-[#1e2a4a] flex items-center justify-between">
-              <div>
-                <span className="text-xs font-semibold text-white block">AI Competency Confidence</span>
-                <span className="text-[11px] text-slate-400">Random Forest binary classifier probability distribution</span>
-              </div>
-              <span className="text-sm font-mono font-bold text-indigo-400">
-                {selectedAssessment.confidence_percent ? `${selectedAssessment.confidence_percent}%` : '—'}
-              </span>
-            </div>
-
-            {/* Actions */}
-            <div className="pt-2 flex justify-end border-t border-[#1b2542]">
-              <button
-                type="button"
-                onClick={() => setIsAssessmentModalOpen(false)}
-                className="px-4 py-2 rounded-xl text-xs font-semibold bg-[#151f38] hover:bg-[#1c294d] text-white border border-[#2b3a67] transition-all cursor-pointer"
-              >
-                Close Audit
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ================================================================= */}
       {/* MODAL: INSPECT ELIGIBILITY REVIEW */}
@@ -3425,6 +3185,9 @@ export const AdminDashboard = () => {
                                 <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold bg-indigo-950 text-indigo-300 border border-indigo-500/30">
                                   Advisory
                                 </span>
+                                <span className="text-[10px] px-1.5 py-0.5 rounded font-mono text-indigo-300 bg-[#12192e] border border-[#2b3a67]">
+                                  Model v3.0.0
+                                </span>
                               </div>
 
                               <div className="flex items-center gap-2 shrink-0">
@@ -3447,30 +3210,166 @@ export const AdminDashboard = () => {
                               </div>
                             </div>
 
+                            {/* Plain Language Grounded Explanation */}
+                            <p className="text-xs text-slate-300 leading-relaxed">
+                              Your task suitability estimate is based on the applicant's demonstrated competencies against this task's requirements, verified experience and task difficulty.
+                            </p>
+
                             <p className="text-[11px] text-slate-400 leading-relaxed">
-                              Fit Probability: <strong className="text-white">{app.suitability_percent}%</strong> &bull; Threshold: <strong className="text-white">&tau; = {app.applied_threshold || '0.60'}</strong> &bull; Model: <span className="font-mono text-indigo-300 text-[10px]">{app.model_traceability?.model_name || 'VerifyMesh_Stage2_Suitability_LR_v2'}</span>
+                              Fit Probability: <strong className="text-white">{app.suitability_percent}%</strong> &bull; Advisory Threshold: <strong className="text-white">&tau; = {app.applied_threshold || '0.60'}</strong> &bull; Pipeline: <span className="font-mono text-indigo-300 text-[10px]">{app.model_traceability?.model_name || 'VerifyMesh_Stage2_Suitability_Pipeline_v3'}</span>
                             </p>
 
                             {/* Factor Explanations */}
                             {Array.isArray(app.contributing_factors) && app.contributing_factors.length > 0 && (
-                              <div className="flex flex-wrap gap-1.5 pt-1">
-                                {app.contributing_factors.map((factor, fIdx) => (
-                                  <span
-                                    key={fIdx}
-                                    className={`inline-flex items-center text-[10px] px-2 py-0.5 rounded-md font-medium border ${
-                                      factor.direction === 'positive'
-                                        ? 'bg-emerald-950/60 text-emerald-300 border-emerald-500/40'
-                                        : factor.direction === 'negative'
-                                        ? 'bg-rose-950/60 text-rose-300 border-rose-500/40'
-                                        : 'bg-[#12192e] text-slate-300 border-[#2b3a67]'
-                                    }`}
-                                    title={factor.summary}
-                                  >
-                                    {factor.label}: {factor.value > 0 && factor.unit === 'pts' ? `+${factor.value}` : factor.value} {factor.unit}
-                                  </span>
-                                ))}
+                              <div className="space-y-1 pt-0.5">
+                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                                  Contributing Model Factors:
+                                </span>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {app.contributing_factors.map((factor, fIdx) => (
+                                    <span
+                                      key={fIdx}
+                                      className={`inline-flex items-center text-[10px] px-2 py-0.5 rounded-md font-medium border ${
+                                        factor.direction === 'positive'
+                                          ? 'bg-emerald-950/60 text-emerald-300 border-emerald-500/40'
+                                          : factor.direction === 'negative'
+                                          ? 'bg-rose-950/60 text-rose-300 border-rose-500/40'
+                                          : 'bg-[#12192e] text-slate-300 border-[#2b3a67]'
+                                      }`}
+                                      title={factor.summary}
+                                    >
+                                      {factor.label}: {factor.value > 0 && factor.unit === 'pts' ? `+${factor.value}` : factor.value} {factor.unit}
+                                    </span>
+                                  ))}
+                                </div>
                               </div>
                             )}
+
+                            {/* Expandable Task-Specific Competency Breakdown */}
+                            <div className="pt-1.5 border-t border-[#1b2542]/70">
+                              <button
+                                type="button"
+                                onClick={() => toggleCompetencyBreakdown(app.application_id)}
+                                className="w-full flex items-center justify-between text-xs font-semibold text-indigo-300 hover:text-white p-2 rounded-lg bg-[#0d1428] hover:bg-[#12192e] border border-[#1b2542] transition-all cursor-pointer"
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  <Info className="w-3.5 h-3.5 text-indigo-400" />
+                                  <span>View Task-Specific Competency Breakdown</span>
+                                </span>
+                                {expandedCompetencies[app.application_id] ? (
+                                  <ChevronUp className="w-4 h-4 text-indigo-400" />
+                                ) : (
+                                  <ChevronDown className="w-4 h-4 text-slate-400" />
+                                )}
+                              </button>
+
+                              {expandedCompetencies[app.application_id] && (
+                                <div className="mt-2.5 overflow-hidden rounded-xl border border-[#1b2542] bg-[#070b14] animate-in fade-in duration-150">
+                                  <div className="overflow-x-auto">
+                                    <table className="w-full text-left text-xs border-collapse">
+                                      <thead>
+                                        <tr className="border-b border-[#1b2542] bg-[#0d1428] text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                          <th className="py-2 px-3">Competency</th>
+                                          <th className="py-2 px-3 text-center">Applicant Score</th>
+                                          <th className="py-2 px-3 text-center">Required Minimum</th>
+                                          <th className="py-2 px-3 text-center">Margin</th>
+                                          <th className="py-2 px-3 text-right">Assessment Status</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-[#1b2542]/60 text-slate-300">
+                                        {(() => {
+                                          const rawList = app.competency_states 
+                                            ? Object.values(app.competency_states) 
+                                            : (app.topic_evaluations || []);
+                                          
+                                          const sortedList = [...rawList].sort((a, b) => {
+                                            const aReq = a.mandatory || a.is_mandatory ? 1 : 0;
+                                            const bReq = b.mandatory || b.is_mandatory ? 1 : 0;
+                                            if (bReq !== aReq) return bReq - aReq;
+                                            return (a.topic_id || 0) - (b.topic_id || 0);
+                                          });
+
+                                          if (sortedList.length === 0) {
+                                            return (
+                                              <tr>
+                                                <td colSpan={5} className="py-3 px-3 text-center text-slate-500 italic">
+                                                  No specific competency topics required for this task.
+                                                </td>
+                                              </tr>
+                                            );
+                                          }
+
+                                          return sortedList.map((item, idx) => {
+                                            const tName = item.topic_name || item.name || `Topic ${item.topic_id}`;
+                                            const isMandatory = item.mandatory || item.is_mandatory;
+                                            const scoreVal = item.score !== null && item.score !== undefined ? `${item.score}%` : 'Not Assessed';
+                                            const reqScoreVal = (item.required_score ?? item.passing_threshold) 
+                                              ? `${item.required_score ?? item.passing_threshold}%` 
+                                              : 'Not Required';
+                                            
+                                            let marginDisplay = '—';
+                                            let marginClass = 'text-slate-400';
+                                            if (item.margin !== null && item.margin !== undefined) {
+                                              const mVal = Number(item.margin);
+                                              marginDisplay = `${mVal > 0 ? '+' : ''}${mVal.toFixed(1)} pts`;
+                                              marginClass = mVal > 0 ? 'text-emerald-400 font-semibold' : mVal < 0 ? 'text-rose-400 font-semibold' : 'text-slate-300 font-semibold';
+                                            }
+
+                                            const stateVal = item.state || (
+                                              item.status === 'Passed' ? 'ASSESSED_AND_PASSED' : 
+                                              item.status === 'Failed' ? 'ASSESSED_AND_FAILED' : 
+                                              (isMandatory ? 'NOT_ASSESSED' : 'NOT_REQUIRED')
+                                            );
+
+                                            let badgeStyle = 'bg-slate-900/70 text-slate-400 border-slate-700/50';
+                                            let badgeText = 'Not Required';
+                                            if (stateVal === 'ASSESSED_AND_PASSED') {
+                                              badgeStyle = 'bg-emerald-950/70 text-emerald-300 border-emerald-500/40';
+                                              badgeText = 'Passed';
+                                            } else if (stateVal === 'ASSESSED_AND_FAILED') {
+                                              badgeStyle = 'bg-rose-950/70 text-rose-300 border-rose-500/40';
+                                              badgeText = 'Failed';
+                                            } else if (stateVal === 'NOT_ASSESSED') {
+                                              badgeStyle = 'bg-amber-950/70 text-amber-300 border-amber-500/40';
+                                              badgeText = 'Not Assessed';
+                                            }
+
+                                            return (
+                                              <tr key={item.topic_id || idx} className="hover:bg-[#0c1427] transition-colors">
+                                                <td className="py-2.5 px-3">
+                                                  <div className="flex items-center gap-1.5">
+                                                    <span className="font-semibold text-white">{tName}</span>
+                                                    {isMandatory && (
+                                                      <span className="text-[9px] px-1.5 py-0.2 rounded font-bold uppercase tracking-wider bg-indigo-950 text-indigo-300 border border-indigo-500/30">
+                                                        Mandatory
+                                                      </span>
+                                                    )}
+                                                  </div>
+                                                </td>
+                                                <td className="py-2.5 px-3 text-center font-mono font-medium text-slate-200">
+                                                  {scoreVal}
+                                                </td>
+                                                <td className="py-2.5 px-3 text-center font-mono text-slate-400">
+                                                  {reqScoreVal}
+                                                </td>
+                                                <td className={`py-2.5 px-3 text-center font-mono ${marginClass}`}>
+                                                  {marginDisplay}
+                                                </td>
+                                                <td className="py-2.5 px-3 text-right">
+                                                  <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold border ${badgeStyle}`}>
+                                                    {badgeText}
+                                                  </span>
+                                                </td>
+                                              </tr>
+                                            );
+                                          });
+                                        })()}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
 
                             <p className="text-[10px] text-slate-500 italic pt-0.5">
                               {app.suitability_disclaimer || 'Advisory Task Suitability Score: Workforce Officer retains final assignment authority.'}
@@ -3499,6 +3398,84 @@ export const AdminDashboard = () => {
                 className="px-4 py-2 rounded-xl text-xs font-semibold bg-[#12192e] text-slate-300 hover:text-white border border-[#2b3a67] transition-all cursor-pointer"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL: ASSIGNMENT WARNING (SCORE BELOW ADVISORY THRESHOLD) */}
+      {/* ========================================================= */}
+      {assignWarningModal.isOpen && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div
+            className="w-full max-w-lg bg-[#0b1020] rounded-2xl shadow-2xl border border-amber-500/50 flex flex-col overflow-hidden text-[#e8ebf7]"
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="p-5 border-b border-[#1b2542] flex items-center justify-between bg-amber-950/20">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-950/80 border border-amber-500/40 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold font-sora text-white">
+                    Advisory Suitability Warning
+                  </h3>
+                  <span className="text-xs text-amber-300 font-medium">
+                    Administrative Override Required
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAssignWarningModal({ isOpen: false, applicant: null, overrideReason: '' })}
+                className="text-slate-400 hover:text-white p-2 rounded-xl hover:bg-[#151f38] transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs sm:text-sm">
+              <div className="p-3.5 rounded-xl bg-amber-950/30 border border-amber-500/30 text-amber-200 space-y-1.5">
+                <p className="font-semibold text-white">
+                  Candidate suitability score ({assignWarningModal.applicant?.suitability_percent}%) is below the advisory threshold (&tau; = {assignWarningModal.applicant?.applied_threshold ?? '0.60'}).
+                </p>
+                <p className="text-xs text-amber-200/80 leading-relaxed">
+                  Stage 2 Machine Learning recommends manual workforce review for candidate <strong className="text-white">{assignWarningModal.applicant?.full_name}</strong>. While authorized administrators retain final authority to assign this task, platform governance requires an override justification to be logged to the immutable audit trail.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
+                  Override Justification <span className="text-amber-400">*</span>
+                </label>
+                <textarea
+                  rows={3}
+                  value={assignWarningModal.overrideReason}
+                  onChange={(e) => setAssignWarningModal(prev => ({ ...prev, overrideReason: e.target.value }))}
+                  placeholder="Provide authoritative reasoning for assigning below threshold (e.g. Exceptional verified domain experience in supervisor reference)..."
+                  className="w-full p-3 rounded-xl bg-[#070b14] border border-[#1b2542] focus:border-amber-500 focus:outline-none text-white text-xs placeholder:text-slate-500 transition-colors"
+                />
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-[#1b2542] bg-[#0d1428] flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setAssignWarningModal({ isOpen: false, applicant: null, overrideReason: '' })}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-[#12192e] text-slate-300 hover:text-white border border-[#2b3a67] transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleAssignTask(assignWarningModal.applicant?.application_id, assignWarningModal.overrideReason)}
+                disabled={!assignWarningModal.overrideReason?.trim() || isActionProcessing}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 disabled:opacity-50 text-white shadow-sm transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                {isActionProcessing ? 'Logging Override...' : 'Confirm Assignment & Log Override'}
               </button>
             </div>
           </div>
